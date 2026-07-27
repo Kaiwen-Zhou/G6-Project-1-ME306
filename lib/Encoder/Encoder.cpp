@@ -3,6 +3,7 @@
 
 // === Configurations === //
 // Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
+// Pins are defined in this file to ensure they are consistent.
 // Using D68 (PK6)(PCINT22) for encoder A interrupt
 // Using D52 (PB1)(PCINT1) for encoder B interrupt
 
@@ -14,10 +15,10 @@
 #include "Encoder.h"
 
 // Pin definitions
-const int encoderApinA = 68;
-const int encoderApinB = 69;
-const int encoderBpinA = 52;
-const int encoderBpinB = 53;
+const int encoderApinA = 68;    // Yellow wire
+const int encoderApinB = 69;    // White wire
+const int encoderBpinA = 52;    // Yellow wire
+const int encoderBpinB = 53;    // White wire
 
 
 Encoder::Encoder(bool isEncoderA) {
