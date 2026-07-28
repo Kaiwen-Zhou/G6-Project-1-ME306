@@ -1,12 +1,6 @@
 // === Encoder.cpp === //
 // This file contains the Encoder class for interfacing with the encoders. It keeps track of the encoder count and direction of rotation. The update function is intented to be called within a pin change interrupt. The interrupt will be triggered when the encoders A output changes.
 
-// === Configurations === //
-// Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
-// Pins are defined in this file to ensure they are consistent.
-// Using D68 (PK6)(PCINT22) for encoder A interrupt
-// Using D52 (PB1)(PCINT1) for encoder B interrupt
-
 // === Usage === //
 // Encoder EncoderA(true);
 // Encoder EncoderB(false);
@@ -20,6 +14,12 @@ ISR(PCINT0_vect) {
   EncoderB.update();
 }
 */
+
+// === Configurations === //
+// Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
+// Pins are defined in this file to ensure they are consistent.
+// Using D68/A14 (PK6)(PCINT22) for encoder A interrupt
+// Using D52 (PB1)(PCINT1) for encoder B interrupt
 
 // === Future Improvements === //
 // Currently store position data in the form of counts but position in mm and velocity and acceleration potentially needed for control loop. Need to decide if to implement that as part of encoder class or not.
@@ -84,7 +84,7 @@ void Encoder::zeroCount() {
     count = 0;
 }
 
-uint16_t Encoder::getCount() {
+int32_t Encoder::getCount() {
     return count;
 }
 

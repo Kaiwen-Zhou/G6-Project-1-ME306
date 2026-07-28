@@ -8,13 +8,13 @@ class Encoder {
     Encoder(bool isEncoderA);
     void update();
     void zeroCount();
-    uint16_t getCount();
+    int32_t getCount();
     bool getDirection();
 
   private:
     int pinA;
     int pinB;
-    uint16_t count = 0;
+    int32_t count = 0;
     bool direction = true;
     bool Aprev = false;
     bool Bprev = false;
