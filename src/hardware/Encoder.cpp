@@ -7,6 +7,20 @@
 // Using D68 (PK6)(PCINT22) for encoder A interrupt
 // Using D52 (PB1)(PCINT1) for encoder B interrupt
 
+// === Usage === //
+// Encoder EncoderA(true);
+// Encoder EncoderB(false);
+/*
+ISR(PCINT2_vect) {
+  // Encoder A
+  EncoderA.update();
+}
+ISR(PCINT0_vect) {
+  // Encoder B
+  EncoderB.update();
+}
+*/
+
 // === Future Improvements === //
 // Currently store position data in the form of counts but position in mm and velocity and acceleration potentially needed for control loop. Need to decide if to implement that as part of encoder class or not.
 // More fault checking and need to implement how system is notified when faults occured. Currently just prints error message to serial
