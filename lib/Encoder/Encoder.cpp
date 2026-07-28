@@ -15,20 +15,25 @@
 #include "Encoder.h"
 
 // Pin definitions
-const int encoderApinA = 68;    // Yellow wire
-const int encoderApinB = 69;    // White wire
+const int encoderApinA = 68;    // A14 // Yellow wire 
+const int encoderApinB = 69;    // A15 // White wire
 const int encoderBpinA = 52;    // Yellow wire
 const int encoderBpinB = 53;    // White wire
-
 
 Encoder::Encoder(bool isEncoderA) {
     // Initialize the encoder pins and set them as inputs
     if (isEncoderA)  {
         pinA = encoderApinA;
         pinB = encoderApinB;
+        // Setup pin change interrupt for encoder A pin D68 (PCINT22)
+        PCICR |= (1 << PCIE2); // Enable Pin Change Interrupt Control Register
+        PCMSK2 |= (1 << PCINT22); // Enable interrupt for pin D68
     } else {
         pinA = encoderBpinA;
         pinB = encoderBpinB;
+        // Setup pin change interrupt for encoder B pin D52 (PCINT1)
+        PCICR |= (1 << PCIE0); // Enable Pin Change Interrupt Control Register
+        PCMSK0 |= (1 << PCINT1); // Enable interrupt for pin D52
     }
     pinMode(pinA, INPUT);
     pinMode(pinB, INPUT);
@@ -42,16 +47,21 @@ void Encoder::update() {
     */
     Acur = digitalRead(pinA);
     Bcur = digitalRead(pinB);
-    
-    direction = Aprev != Bprev;
-    
+
+    // Determine the direction of rotation based on the current and prev states of the encoder pins
+    // Direction is true for clockwise and false for counter clockwise // COULD RENAME GET DIRECTION FUNCTION TO INDICATE IF TURNING CLOCKWISE OR COUNTER CLOCKWISE
+    direction = (Acur == Bprev);
+
     // Increment counter in direction of movement
     if (direction) {
         count++;
     } else {
         count--;
     }
-    
+
+    Aprev = Acur;
+    Bprev = Bcur;
+
     // TODO
     // implement check to fault if enocder is moving to fast for function to keep up with. If both A and B have changed values or Aprev = Acur or could implement a timer to check if the time between updates is too short 
 }
@@ -60,7 +70,7 @@ void Encoder::zeroCount() {
     count = 0;
 }
 
-int Encoder::getCount() {
+uint16_t Encoder::getCount() {
     return count;
 }
 
