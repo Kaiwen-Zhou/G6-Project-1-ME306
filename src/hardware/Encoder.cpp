@@ -27,12 +27,14 @@ ISR(PCINT0_vect) {
 
 #include <Arduino.h>
 #include "hardware/Encoder.h"
+#include "config/PinConfig.h"
 
 // Pin definitions
-const int encoderApinA = 68;    // A14 // Yellow wire 
-const int encoderApinB = 69;    // A15 // White wire
-const int encoderBpinA = 52;    // Yellow wire
-const int encoderBpinB = 53;    // White wire
+
+const int encoderApinA = PinConfig::ENCODER_A_PIN_A;    // A14 // Yellow wire 
+const int encoderApinB = PinConfig::ENCODER_A_PIN_B;    // A15 // White wire
+const int encoderBpinA = PinConfig::ENCODER_B_PIN_A;    // Yellow wire
+const int encoderBpinB = PinConfig::ENCODER_B_PIN_B;    // White wire
 
 Encoder::Encoder(bool isEncoderA) {
     // Initialize the encoder pins and set them as inputs
