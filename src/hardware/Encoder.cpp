@@ -13,9 +13,15 @@ ISR(PCINT0_vect) {
   // Encoder B
   EncoderB.update();
 }
+ISR(TIMER1_COMPA_vect) {
+  // Update encoder velocities
+  EncoderA.velocityUpdate();
+  EncoderB.velocityUpdate();
+}
 */
 
 // === Configurations === //
+// Currently uses Timer1 for velocity calculations
 // Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
 // Pins are defined in this file to ensure they are consistent.
 // Using D68/A14 (PK6)(PCINT22) for encoder A interrupt
@@ -27,7 +33,7 @@ ISR(PCINT0_vect) {
 // Only counting change in A output so only counting half the actual counts
 // 48*172*0.5 = 4128 counts per output revolution
 // (2*pi*radius)/(4128 counts) = distance per count
-int radius = 15; // mm
+int radius = 15; // mm // CHECK THIS VALUE IS CORRECT FOR WHEEL RADIUS
 float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.02293
 
 
@@ -40,7 +46,6 @@ float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.02293
 #include "config/PinConfig.h"
 
 // Pin definitions
-
 const int encoderApinA = PinConfig::ENCODER_A_PIN_A;    // A14 // Yellow wire 
 const int encoderApinB = PinConfig::ENCODER_A_PIN_B;    // A15 // White wire
 const int encoderBpinA = PinConfig::ENCODER_B_PIN_A;    // Yellow wire
@@ -65,6 +70,18 @@ Encoder::Encoder(bool isEncoderA) {
     pinMode(pinB, INPUT);
     Aprev = digitalRead(pinA);
     Bprev = digitalRead(pinB);
+}
+
+void Encoder::initializeEncoderTimer() {
+    // Run this command during setup
+    TCCR1A = 0;                             // Reset registers  
+    TCCR1B = 0;
+    TCNT1 = 0;
+
+    OCR1A = 249;                            // Set compare match value to correspond to 1ms based on prescaler of 64 and 16MHz clock
+    TCCR1B |= (1 << WGM12);                 // Enable CTC mode
+    TCCR1B |= (1 << CS11) | (1 << CS10);    // Set prescaler to 64
+    TIMSK1 |= (1 << OCIE1A);                // Enable Timer1 compare interrupt
 }
 
 void Encoder::update() {
@@ -92,8 +109,15 @@ void Encoder::update() {
     // implement check to fault if enocder is moving to fast for function to keep up with. If both A and B have changed values or Aprev = Acur or could implement a timer to check if the time between updates is too short 
 }
 
+void Encoder::updateVelocity() {
+    velocity = (count - lastCount) * distancePerCount * 1000;
+    lastCount = count;
+}
+
 void Encoder::zeroCount() {
     count = 0;
+    lastCount = 0;
+    velocity = 0;
 }
 
 int32_t Encoder::getCount() {
@@ -106,4 +130,8 @@ bool Encoder::getDirection() {
 
 float Encoder::getDistance() {
     return count * distancePerCount;
+}
+
+float Encoder::getVelocity() {
+    return velocity;
 }
