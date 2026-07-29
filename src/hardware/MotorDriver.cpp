@@ -1,4 +1,5 @@
 #include "hardware/MotorDriver.h"
+#include "config/PinConfig.h"
 
 // Constructor
 MotorDriver::MotorDriver(uint8_t directionPin,
