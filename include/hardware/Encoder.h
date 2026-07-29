@@ -15,12 +15,12 @@ class Encoder {
   private:
     int pinA;
     int pinB;
-    int32_t count = 0;
-    bool direction = true;
-    bool Aprev = false;
-    bool Bprev = false;
-    bool Acur = false;
-    bool Bcur = false;
+    volatile int32_t count = 0;
+    volatile bool direction = true;
+    volatile bool Aprev = false;
+    volatile bool Bprev = false;
+    volatile bool Acur = false;
+    volatile bool Bcur = false;
 };
 
 #endif // ENCODER_H
