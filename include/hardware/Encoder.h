@@ -10,6 +10,7 @@ class Encoder {
     void zeroCount();
     int32_t getCount();
     bool getDirection();
+    float getDistance();
 
   private:
     int pinA;

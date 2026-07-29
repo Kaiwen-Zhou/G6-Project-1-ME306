@@ -21,6 +21,16 @@ ISR(PCINT0_vect) {
 // Using D68/A14 (PK6)(PCINT22) for encoder A interrupt
 // Using D52 (PB1)(PCINT1) for encoder B interrupt
 
+// === Calculations === //
+// 48 counts per revolution of motor shaft
+// Gear ratio 172:1
+// Only counting change in A output so only counting half the actual counts
+// 48*172*0.5 = 4128 counts per output revolution
+// (2*pi*radius)/(4128 counts) = distance per count
+int radius = 15; // mm
+float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.02293
+
+
 // === Future Improvements === //
 // Currently store position data in the form of counts but position in mm and velocity and acceleration potentially needed for control loop. Need to decide if to implement that as part of encoder class or not.
 // More fault checking and need to implement how system is notified when faults occured. Currently just prints error message to serial
@@ -92,4 +102,8 @@ int32_t Encoder::getCount() {
 
 bool Encoder::getDirection() {
     return direction;
+}
+
+float Encoder::getDistance() {
+    return count * distancePerCount;
 }
