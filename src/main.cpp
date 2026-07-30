@@ -195,7 +195,7 @@ bool anyRawLimitPressed()
 {
     for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
     {
-        if (digitalRead(limitPins[index]) == LOW)
+        if (digitalRead(limitPins[index]) == HIGH)
         {
             return true;
         }
@@ -221,7 +221,7 @@ bool allLimitsReleased()
 {
     for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
     {
-        if ((digitalRead(limitPins[index]) == LOW) ||
+        if ((digitalRead(limitPins[index]) == HIGH) ||
             limitSwitches[index]->isPressed())
         {
             return false;
@@ -273,7 +273,7 @@ void printLimitBits(bool raw)
     for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
     {
         const bool pressed = raw
-            ? (digitalRead(limitPins[index]) == LOW)
+            ? (digitalRead(limitPins[index]) == HIGH)
             : limitSwitches[index]->isPressed();
 
         Serial.print(pressed ? '1' : '0');
@@ -560,7 +560,7 @@ void attachLimitInterrupt(uint8_t pin, void (*handler)(), const char *name)
         return;
     }
 
-    attachInterrupt(interruptNumber, handler, FALLING);
+    attachInterrupt(interruptNumber, handler, RISING);
 }
 
 void setup()

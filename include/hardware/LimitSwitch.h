@@ -40,11 +40,11 @@ private:
 
     unsigned long debounceDelay; // Debounce time delay in ms
 
-    bool stableState; // Debounced stable state
+    volatile bool stableState; // Debounced stable state
 
-    bool lastReading; // Previous raw reading
+    volatile bool lastReading; // Previous raw reading
 
-    unsigned long lastDebounceTime; // Time when the last state change occurred
+    volatile unsigned long lastDebounceTime; // Time when the last state change occurred
 };
 
 #endif

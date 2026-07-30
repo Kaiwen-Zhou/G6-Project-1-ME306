@@ -10,8 +10,8 @@ LimitSwitch::LimitSwitch(uint8_t pin,
     debounceDelay = debounceTime;
 
     // Assume released until hardware is initialised
-    stableState = HIGH;
-    lastReading = HIGH;
+    stableState = LOW;
+    lastReading = LOW;
 
     // No debounce timing has started yet
     lastDebounceTime = 0;
@@ -58,7 +58,7 @@ void LimitSwitch::update()
 //Active-low -- (LOW means switch is pressed.)
 bool LimitSwitch::isPressed() const
 {
-    return (stableState == LOW);
+    return (stableState == HIGH);
 }
 
 //Returns true if switch is released.
