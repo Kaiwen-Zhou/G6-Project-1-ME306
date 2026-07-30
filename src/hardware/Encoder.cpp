@@ -33,8 +33,8 @@ ISR(TIMER1_COMPA_vect) {
 // Only counting change in A output so only counting half the actual counts
 // 48*172*0.5 = 4128 counts per output revolution
 // (2*pi*radius)/(4128 counts) = distance per count
-int radius = 15; // mm // CHECK THIS VALUE IS CORRECT FOR WHEEL RADIUS
-float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.02293
+int radius = 14; // mm // value measured with ruler
+float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.0213
 
 
 // === Future Improvements === //
