@@ -1,60 +1,127 @@
 #include "control/PIDController.h"
 
-void initialisePI(
-    PIController &controller,
-    float kp,
-    float ki,
-    float minimumOutput,
-    float maximumOutput
-)
+PIDController::PIDController(float proportionalGain,
+                             float integralGain,
+                             float minimumOutput,
+                             float maximumOutput,
+                             float minimumIntegralOutput,
+                             float maximumIntegralOutput)
+    : proportionalGain_(proportionalGain),
+      integralGain_(integralGain),
+      integralOutput_(0.0f),
+      minimumOutput_(minimumOutput),
+      maximumOutput_(maximumOutput),
+      minimumIntegralOutput_(minimumIntegralOutput),
+      maximumIntegralOutput_(maximumIntegralOutput)
 {
-    controller.kp = kp;
-    controller.ki = ki;
-    controller.integralError = 0.0f;
-    controller.minimumOutput = minimumOutput;
-    controller.maximumOutput = maximumOutput;
 }
 
-void resetPI(PIController &controller)
+float PIDController::update(float error, float timeStepSeconds)
 {
-    controller.integralError = 0.0f;
+    const float proportionalOutput = proportionalGain_ * error;
+
+    float proposedIntegralOutput = integralOutput_;
+
+    // I(k) = I(k-1) + Ki * error(k) * dt
+    // A non-positive dt skips integration but still allows proportional output.
+    if (timeStepSeconds > 0.0f)
+    {
+        proposedIntegralOutput +=
+            integralGain_ * error * timeStepSeconds;
+    }
+
+    // Limit the stored integral contribution.
+    if (proposedIntegralOutput > maximumIntegralOutput_)
+    {
+        proposedIntegralOutput = maximumIntegralOutput_;
+    }
+    else if (proposedIntegralOutput < minimumIntegralOutput_)
+    {
+        proposedIntegralOutput = minimumIntegralOutput_;
+    }
+
+    const float proposedOutput =
+        proportionalOutput + proposedIntegralOutput;
+
+    const float integralChange =
+        proposedIntegralOutput - integralOutput_;
+
+    // Conditional integration anti-windup:
+    // block an integral change only when it would push a saturated output
+    // farther into saturation. A change in the opposite direction is accepted,
+    // so the integral can unwind after the error reverses.
+    const bool pushesFurtherAboveMaximum =
+        proposedOutput > maximumOutput_ && integralChange > 0.0f;
+
+    const bool pushesFurtherBelowMinimum =
+        proposedOutput < minimumOutput_ && integralChange < 0.0f;
+
+    if (!pushesFurtherAboveMaximum && !pushesFurtherBelowMinimum)
+    {
+        integralOutput_ = proposedIntegralOutput;
+    }
+
+    float output = proportionalOutput + integralOutput_;
+
+    // Limit the final command sent to the next control module.
+    if (output > maximumOutput_)
+    {
+        output = maximumOutput_;
+    }
+    else if (output < minimumOutput_)
+    {
+        output = minimumOutput_;
+    }
+
+    return output;
 }
 
-float updatePI(
-    PIController &controller,
-    float setpoint,
-    float measurement,
-    float timeStepSeconds
-)
+void PIDController::reset()
 {
-    if (timeStepSeconds <= 0.0f)
+    integralOutput_ = 0.0f;
+}
+
+void PIDController::setGains(float proportionalGain, float integralGain)
+{
+    proportionalGain_ = proportionalGain;
+    integralGain_ = integralGain;
+}
+
+void PIDController::setOutputLimits(float minimumOutput,
+                                    float maximumOutput)
+{
+    minimumOutput_ = minimumOutput;
+    maximumOutput_ = maximumOutput;
+}
+
+void PIDController::setIntegralLimits(float minimumIntegralOutput,
+                                      float maximumIntegralOutput)
+{
+    minimumIntegralOutput_ = minimumIntegralOutput;
+    maximumIntegralOutput_ = maximumIntegralOutput;
+
+    // Keep the existing state inside the newly configured limits.
+    if (integralOutput_ > maximumIntegralOutput_)
     {
-        return 0.0f;
+        integralOutput_ = maximumIntegralOutput_;
     }
-
-    float error = setpoint - measurement;
-
-    // Discrete approximation of the integral:
-    // integral(k) = integral(k-1) + error(k) * dt
-    float proposedIntegral =
-        controller.integralError + error * timeStepSeconds;
-
-    float proportionalOutput = controller.kp * error;
-    float integralOutput = controller.ki * proposedIntegral;
-    float proposedOutput = proportionalOutput + integralOutput;
-
-    // Integral clamping from Lecture 3:
-    // if the actuator is saturated, do not store the new integral value.
-    if (proposedOutput > controller.maximumOutput)
+    else if (integralOutput_ < minimumIntegralOutput_)
     {
-        return controller.maximumOutput;
+        integralOutput_ = minimumIntegralOutput_;
     }
+}
 
-    if (proposedOutput < controller.minimumOutput)
-    {
-        return controller.minimumOutput;
-    }
+float PIDController::getProportionalGain() const
+{
+    return proportionalGain_;
+}
 
-    controller.integralError = proposedIntegral;
-    return proposedOutput;
+float PIDController::getIntegralGain() const
+{
+    return integralGain_;
+}
+
+float PIDController::getIntegralOutput() const
+{
+    return integralOutput_;
 }
