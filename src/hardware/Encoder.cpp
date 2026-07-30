@@ -78,7 +78,7 @@ void Encoder::initializeEncoderTimer() {
     TCCR1B = 0;
     TCNT1 = 0;
 
-    OCR1A = 249;                            // Set compare match value to correspond to 1ms based on prescaler of 64 and 16MHz clock
+    OCR1A = 2499;                            // Set compare match value to correspond to 1ms based on prescaler of 64 and 16MHz clock
     TCCR1B |= (1 << WGM12);                 // Enable CTC mode
     TCCR1B |= (1 << CS11) | (1 << CS10);    // Set prescaler to 64
     TIMSK1 |= (1 << OCIE1A);                // Enable Timer1 compare interrupt
@@ -110,7 +110,7 @@ void Encoder::update() {
 }
 
 void Encoder::updateVelocity() {
-    velocity = (count - lastCount) * distancePerCount * 1000;
+    velocity = (count - lastCount) /* distancePerCount*/;
     lastCount = count;
 }
 

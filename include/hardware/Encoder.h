@@ -25,7 +25,7 @@ class Encoder {
     volatile bool Acur = false;
     volatile bool Bcur = false;
     volatile int32_t lastCount = 0;
-    volatile float velocity = 0;      // mm/s
+    volatile float velocity = 0;      // mm/s // FLOAT INACCURATE SHOULD CHANGE TO count/s
 };
 
 #endif // ENCODER_H
