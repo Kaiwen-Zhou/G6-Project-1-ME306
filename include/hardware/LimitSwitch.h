@@ -53,6 +53,15 @@ private:
     volatile bool lastReading; // Previous raw reading
 
     volatile unsigned long lastDebounceTime; // Time when the last state change occurred
+    volatile bool interruptPending; // Flag to indicate if an interrupt has occurred
+
+    bool verificationActive; // Flag to indicate if verification is active
+
+    bool pressedEvent; // Flag to indicate if a pressed event has occurred
+
+    bool releasedEvent; // Flag to indicate if a released event has occurred
+
+    bool rejectedInterruptEvent; // Flag to indicate if a rejected interrupt event has occurred
 };
 
 #endif
