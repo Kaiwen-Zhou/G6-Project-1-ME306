@@ -42,7 +42,7 @@ FSMResult PlotterSystem::requestHoming() {
     return dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
-FSMResult PlotterSystem::requestMove(int32_t axisXTargetCount, int32_t axisYTargetCount) {
+FSMResult PlotterSystem::requestMove(float targetXmm, float targetYmm) {
     const FSMResult result = fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
 
     if (!result.accepted) {
@@ -50,8 +50,8 @@ FSMResult PlotterSystem::requestMove(int32_t axisXTargetCount, int32_t axisYTarg
     }
 
     // store the command payload only after the FSM accepts the request
-    pendingAxisXTargetCount_ = axisXTargetCount;
-    pendingAxisYTargetCount_ = axisYTargetCount;
+    pendingAxisXTargetCount_ = targetXmm;
+    pendingAxisYTargetCount_ = targetYmm;
     executeAction(result.action);
 
     return result;
@@ -135,6 +135,23 @@ void PlotterSystem::updateHoming() {
 }
 
 void PlotterSystem::updateMoving() {
+
+    /* waiting for TrajectoryPlanner and XYCoordinator to be implemented
+
+    const TrajectorySample sample = trajectoryPlanner_.update(dt);
+
+    const AxisReferences references = xyCorrdinator_.referencesAtPathPosition(sample.position);
+
+    axisX_.setReferencePosition(references.axisXCount);
+    axisY_.setReferencePosition(references.axisYCount);
+
+    axisX_.update();
+    axisY_.update();
+
+    if (sample.complete && axisX_.isWithinTolerance() && axisY_.isWithinTolerance()) {
+        dispatchAndExecute(FSMEventType::MOVE_COMPLETED);
+    }
+    */
     axisX_.update();
     axisY_.update();
 

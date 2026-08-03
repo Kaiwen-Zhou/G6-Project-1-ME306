@@ -33,8 +33,7 @@ class PlotterSystem {
 
     // High-level command/event entry points.
     FSMResult requestHoming();
-    FSMResult requestMove(int32_t axisXTargetCount,
-                          int32_t axisYTargetCount);
+    FSMResult requestMove(float targetXmm, float targetYmm);
 
     // Call only after the homing module has stopped the mechanism and zeroed
     // both encoder counts successfully.
