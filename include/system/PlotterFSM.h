@@ -34,7 +34,7 @@ enum class FSMEventType : uint8_t {
     HOMING_COMPLETED,
     MOVE_COMPLETED,
     FAULT_DETECTED,
-    FAULT_RESET_REQUESTED     // may be used to reset the fault state and return to IDLE (if implemented)
+    FAULT_RESET_REQUESTED     
 };
 
 enum class FaultCode : uint8_t {

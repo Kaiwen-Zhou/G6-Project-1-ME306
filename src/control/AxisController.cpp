@@ -11,28 +11,24 @@ AxisController::AxisController(Encoder& encoder,
                                PIDController& pidController,
                                MotorDriver& motor,
                                int32_t positionTolerance,
-                               unsigned long updateIntervalMicros,
-                               uint8_t requiredSettledUpdates)
+                               unsigned long updateIntervalMicros)
     : encoder_(encoder),
       pidController_(pidController),
       motor_(motor),
       positionTolerance_(positionTolerance),
       updateIntervalMicros_(updateIntervalMicros),
-      requiredSettledUpdates_(requiredSettledUpdates),
-      targetPosition_(0),
+      referencePosition_(0),
       lastUpdateMicros_(0),
-      settledUpdateCount_(0),
-      active_(false),
-      complete_(false)
+      active_(false)
 {
     if (positionTolerance_ < 0)
     {
         positionTolerance_ = 0;
     }
 
-    if (requiredSettledUpdates_ == 0)
-    {
-        requiredSettledUpdates_ = 1;
+    // Avoid a zero-length control interval
+    if (updateIntervalMicros_ == 0) {
+        updateIntervalMicros_ = 1;
     }
 }
 
@@ -42,16 +38,28 @@ void AxisController::begin()
     reset();
 }
 
-void AxisController::setTargetPosition(int32_t targetPosition)
+void AxisController::startTracking()
 {
     motor_.stop();
     pidController_.reset();
 
-    targetPosition_ = targetPosition;
-    settledUpdateCount_ = 0;
-    active_ = true;
-    complete_ = false;
+    // Begin from the current encoder position so that starting the controller
+    // does not immediately create an unintended position error.
+    referencePosition_ = static_cast<int32_t>(encoder_.getCount());
+
     lastUpdateMicros_ = micros();
+    active_ = true;
+}
+
+void AxisController::setReferencePosition(int32_t referencePosition)
+{
+    if (!active_) {
+        return;
+    }
+
+    // Do not stop motors, reset the PI or restart the update timer here
+    // A trajectroy planner may call this function every control cycle
+    referencePosition_ = referencePosition;
 }
 
 void AxisController::update()
@@ -75,30 +83,21 @@ void AxisController::update()
     // value before subtracting so reverse errors are calculated correctly.
     const int32_t currentPosition =
         static_cast<int32_t>(encoder_.getCount());
-    const int32_t positionError = targetPosition_ - currentPosition;
 
-    if (isWithinTolerance(positionError))
+    const int32_t trackingError = referencePosition_ - currentPosition;
+
+    if (isErrorWithinTolerance(trackingError))
     {
+        // The controller remains active as this may only be an intermediate trajectory reference
         motor_.stop();
-        pidController_.reset();
-
-        ++settledUpdateCount_;
-
-        if (settledUpdateCount_ >= requiredSettledUpdates_)
-        {
-            finishMove();
-        }
-
         return;
     }
-
-    settledUpdateCount_ = 0;
 
     const float timeStepSeconds =
         static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
 
     const float controllerOutput =
-        pidController_.update(static_cast<float>(positionError),
+        pidController_.update(static_cast<float>(trackingError),
                               timeStepSeconds);
 
     motor_.setOutput(static_cast<int16_t>(controllerOutput));
@@ -108,15 +107,13 @@ void AxisController::stop()
 {
     motor_.stop();
     pidController_.reset();
-    settledUpdateCount_ = 0;
     active_ = false;
-    complete_ = false;
 }
 
 void AxisController::reset()
 {
     stop();
-    targetPosition_ = static_cast<int32_t>(encoder_.getCount());
+    referencePosition_ = static_cast<int32_t>(encoder_.getCount());
     lastUpdateMicros_ = micros();
 }
 
@@ -125,39 +122,34 @@ bool AxisController::isActive() const
     return active_;
 }
 
-bool AxisController::isComplete() const
+bool AxisController::isWithinTolerance() const 
 {
-    return complete_;
+    const int32_t currentPosition = static_cast<int32_t>(encoder_.getCount());
+    const int32_t trackingError = referencePosition_ - currentPosition;
+
+    return isErrorWithinTolerance(trackingError);
 }
 
 AxisTelemetry AxisController::getTelemetry() const
 {
     const int32_t currentPosition =
         static_cast<int32_t>(encoder_.getCount());
-    const int32_t positionError = targetPosition_ - currentPosition;
+
+    const int32_t trackingError = referencePosition_ - currentPosition;
 
     return {
-        targetPosition_,
+        referencePosition_,
         currentPosition,
-        positionError,
+        trackingError,
         motor_.getOutput(),
         pidController_.getIntegralOutput(),
-        isWithinTolerance(positionError),
+        isErrorWithinTolerance(trackingError),
         active_,
-        complete_
     };
 }
 
-bool AxisController::isWithinTolerance(int32_t error) const
+bool AxisController::isErrorWithinTolerance(int32_t error) const
 {
-    return error >= -positionTolerance_ &&
-           error <= positionTolerance_;
-}
-
-void AxisController::finishMove()
-{
-    motor_.stop();
-    pidController_.reset();
-    active_ = false;
-    complete_ = true;
+    return  error >= -positionTolerance_ &&
+            error <= positionTolerance_;
 }

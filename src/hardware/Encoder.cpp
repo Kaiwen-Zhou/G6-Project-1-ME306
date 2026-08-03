@@ -1,12 +1,6 @@
 // === Encoder.cpp === //
 // This file contains the Encoder class for interfacing with the encoders. It keeps track of the encoder count and direction of rotation. The update function is intented to be called within a pin change interrupt. The interrupt will be triggered when the encoders A output changes.
 
-// === Configurations === //
-// Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
-// Pins are defined in this file to ensure they are consistent.
-// Using D68 (PK6)(PCINT22) for encoder A interrupt
-// Using D52 (PB1)(PCINT1) for encoder B interrupt
-
 // === Usage === //
 // Encoder EncoderA(true);
 // Encoder EncoderB(false);
@@ -19,7 +13,20 @@ ISR(PCINT0_vect) {
   // Encoder B
   EncoderB.update();
 }
+ISR(TIMER1_COMPA_vect) {
+  // Update encoder velocities
+  EncoderA.velocityUpdate();
+  EncoderB.velocityUpdate();
+}
 */
+
+// === Configurations === //
+// Currently uses Timer1 for velocity calculations
+// Since using pin change interrupts each encoder has to use a different register as only one interrupt service routine can be used per register (e.g. PB0-7).
+// Pins are defined in this file to ensure they are consistent.
+// Using D68/A14 (PK6)(PCINT22) for encoder A interrupt
+// Using D52 (PB1)(PCINT1) for encoder B interrupt
+
 
 // === Future Improvements === //
 // Currently store position data in the form of counts but position in mm and velocity and acceleration potentially needed for control loop. Need to decide if to implement that as part of encoder class or not.
@@ -28,9 +35,9 @@ ISR(PCINT0_vect) {
 #include <Arduino.h>
 #include "hardware/Encoder.h"
 #include "config/PinConfig.h"
+#include "config/SystemConfig.h"
 
 // Pin definitions
-
 const int encoderApinA = PinConfig::ENCODER_A_PIN_A;    // A14 // Yellow wire 
 const int encoderApinB = PinConfig::ENCODER_A_PIN_B;    // A15 // White wire
 const int encoderBpinA = PinConfig::ENCODER_B_PIN_A;    // Yellow wire
@@ -55,6 +62,19 @@ Encoder::Encoder(bool isEncoderA) {
     pinMode(pinB, INPUT);
     Aprev = digitalRead(pinA);
     Bprev = digitalRead(pinB);
+}
+
+void Encoder::initializeEncoderTimer() {
+    // VELOCITY WORK IN PROGGRESS
+    // Run this command during setup
+    TCCR1A = 0;                             // Reset registers  
+    TCCR1B = 0;
+    TCNT1 = 0;
+
+    OCR1A = 2499;                           // Set compare match value to correspond to 10ms based on prescaler of 64 and 16MHz clock
+    TCCR1B |= (1 << WGM12);                 // Enable CTC mode
+    TCCR1B |= (1 << CS11) | (1 << CS10);    // Set prescaler to 64
+    TIMSK1 |= (1 << OCIE1A);                // Enable Timer1 compare interrupt
 }
 
 void Encoder::update() {
@@ -82,14 +102,31 @@ void Encoder::update() {
     // implement check to fault if enocder is moving to fast for function to keep up with. If both A and B have changed values or Aprev = Acur or could implement a timer to check if the time between updates is too short 
 }
 
-void Encoder::zeroCount() {
-    count = 0;
+void Encoder::updateVelocity() {
+    // VELOCITY WORK IN PROGGRESS
+    velocity = (count - lastCount) /* distancePerCount*/;
+    lastCount = count;
 }
 
-uint16_t Encoder::getCount() {
+void Encoder::zeroCount() {
+    count = 0;
+    lastCount = 0;
+    velocity = 0;
+}
+
+int32_t Encoder::getCount() {
     return count;
 }
 
 bool Encoder::getDirection() {
     return direction;
+}
+
+float Encoder::getDistance() {
+    return count * SystemConfig::MOTOR_OUTPUT_DISTANCE_PER_COUNT; // mm
+}
+
+float Encoder::getVelocity() {
+    // VELOCITY WORK IN PROGGRESS
+    return velocity;
 }

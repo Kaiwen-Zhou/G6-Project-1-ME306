@@ -6,22 +6,25 @@
 #include "hardware/Encoder.h"
 #include "hardware/MotorDriver.h"
 
-// Basic values that can be printed or read by the system layer.
+// Motor-space telemetry for one A/B control channel.
+// Cartesian X/Y telemetry is calculated by XYCoordinator.
 struct AxisTelemetry
 {
-    int32_t targetPosition;
+    int32_t referencePosition;
     int32_t currentPosition;
-    int32_t positionError;
+    int32_t trackingError;
     int16_t motorOutput;
     float integralOutput;
     bool withinTolerance;
     bool active;
-    bool complete;
 };
 
-// Controls one motor using one encoder and one PIDController.
-// X-Y kinematics, limit switches, homing, G-code and FSM events are handled
-// by the higher-level system code.
+// Tracks one motor-space encoder-count reference using one motor,
+// one encoder and one PIDController.
+//
+// Each instance controls either motor coordinate A or B.
+// Cartesian conversion, trajectory generation, homing and complete-move
+// detection are handled by higher-level system modules.
 class AxisController
 {
 public:
@@ -29,32 +32,34 @@ public:
                    PIDController& pidController,
                    MotorDriver& motor,
                    int32_t positionTolerance,
-                   unsigned long updateIntervalMicros,
-                   uint8_t requiredSettledUpdates = 1);
+                   unsigned long updateIntervalMicros);
 
-    // Initialise the motor and leave the axis stopped.
+    // Initialise the motor and leave the controller stopped.
     void begin();
 
-    // Start a non-blocking move to an absolute encoder-count target.
-    void setTargetPosition(int32_t targetPosition);
+    // Start reference tracking and reset the PID state once.
+    void startTracking();
 
-    // Call repeatedly from loop(). A control calculation is performed only
-    // after the configured update interval has elapsed.
+    // Update the encoder-count reference without resetting the PID.
+    // This function does not activate an inactive controller.
+    void setReferencePosition(int32_t referencePosition);
+
+    // Run one non-blocking control update when the configured interval
+    // has elapsed.
     void update();
 
-    // Stop the motor, cancel the move and clear the PID integral state.
+    // Stop the motor, deactivate tracking and clear the PID state.
     void stop();
 
-    // Return to an idle state and use the current position as the target.
+    // Stop tracking and use the current encoder position as the reference.
     void reset();
 
     bool isActive() const;
-    bool isComplete() const;
+    bool isWithinTolerance() const;
     AxisTelemetry getTelemetry() const;
 
 private:
-    bool isWithinTolerance(int32_t error) const;
-    void finishMove();
+    bool isErrorWithinTolerance(int32_t error) const;
 
     Encoder& encoder_;
     PIDController& pidController_;
@@ -62,11 +67,8 @@ private:
 
     int32_t positionTolerance_;
     unsigned long updateIntervalMicros_;
-    uint8_t requiredSettledUpdates_;
 
-    int32_t targetPosition_;
+    int32_t referencePosition_;
     unsigned long lastUpdateMicros_;
-    uint8_t settledUpdateCount_;
     bool active_;
-    bool complete_;
 };
