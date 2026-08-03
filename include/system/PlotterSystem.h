@@ -23,7 +23,7 @@ namespace plotter {
 
 class PlotterSystem {
  public:
-    PlotterSystem(AxisController& axisX, AxisController& axisY);
+    PlotterSystem(AxisController& axisA, AxisController& axisB);
 
     // Initialise both axes and automatically enter the startup HOMING state.
     void begin();
@@ -33,7 +33,7 @@ class PlotterSystem {
 
     // High-level command/event entry points.
     FSMResult requestHoming();
-    FSMResult requestMove(float targetXmm, float targetYmm);
+    FSMResult requestMove(int32_t axisATargetCount, int32_t axisBTargetCount);
 
     // Call only after the homing module has stopped the mechanism and zeroed
     // both encoder counts successfully.
@@ -61,11 +61,14 @@ class PlotterSystem {
     void stopAllAxes();
 
     PlotterFSM fsm_;
-    AxisController& axisX_;
-    AxisController& axisY_;
+    AxisController& axisA_;
+    AxisController& axisB_;
 
-    int32_t pendingAxisXTargetCount_;
-    int32_t pendingAxisYTargetCount_;
+    int32_t pendingAxisATargetCount_;
+    int32_t pendingAxisBTargetCount_;
+
+    bool moveSettling_;
+    unsigned long moveSettlingStartMicros_;
 };
 
 }  // namespace plotter

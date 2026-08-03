@@ -1,168 +1,240 @@
 #include "system/PlotterSystem.h"
 
+#include <Arduino.h>
+
 namespace plotter {
 
-PlotterSystem::PlotterSystem(AxisController& axisX, AxisController& axisY)
-    : axisX_(axisX),
-      axisY_(axisY),
-      pendingAxisXTargetCount_(0),
-      pendingAxisYTargetCount_(0) {}
+namespace
+{
+// Temporary settling requirement for fixed A/B target tests.
+// Move this value to SystemConfig later.
+constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
+}
 
-void PlotterSystem::begin() {
-    axisX_.begin();
-    axisY_.begin();
+PlotterSystem::PlotterSystem(AxisController& axisA,
+                             AxisController& axisB)
+    : axisA_(axisA),
+      axisB_(axisB),
+      pendingAxisATargetCount_(0),
+      pendingAxisBTargetCount_(0),
+      moveSettling_(false),
+      moveSettlingStartMicros_(0)
+{
+}
+
+void PlotterSystem::begin()
+{
+    axisA_.begin();
+    axisB_.begin();
 
     fsm_.begin();
 
-    // Startup homing - a system policy rather than an FSM reset state
-    // Keeps the FSM reusable while ensuring startup follows IDLE -> HOMING.
+    // Startup homing is a system policy rather than an FSM reset state.
+    // The system therefore follows IDLE -> HOMING after initialisation.
     dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
-void PlotterSystem::update() {
-    switch (fsm_.state()) {
+void PlotterSystem::update()
+{
+    switch (fsm_.state())
+    {
         case PlotterState::IDLE:
             break;
-        
+
         case PlotterState::HOMING:
             updateHoming();
             break;
-        
+
         case PlotterState::MOVING:
             updateMoving();
             break;
 
         case PlotterState::FAULT:
-            // both axes are stopped by the Enter Fault action
+            // Both motor-space controllers were stopped by ENTER_FAULT.
             break;
     }
 }
 
-FSMResult PlotterSystem::requestHoming() {
+FSMResult PlotterSystem::requestHoming()
+{
     return dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
-FSMResult PlotterSystem::requestMove(float targetXmm, float targetYmm) {
-    const FSMResult result = fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
+FSMResult PlotterSystem::requestMove(
+    int32_t axisATargetCount,
+    int32_t axisBTargetCount)
+{
+    const FSMResult result =
+        fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
 
-    if (!result.accepted) {
+    if (!result.accepted)
+    {
         return result;
     }
 
-    // store the command payload only after the FSM accepts the request
-    pendingAxisXTargetCount_ = targetXmm;
-    pendingAxisYTargetCount_ = targetYmm;
+    // These are absolute motor-space encoder-count targets.
+    // Store the payload only after the FSM accepts the request.
+    pendingAxisATargetCount_ = axisATargetCount;
+    pendingAxisBTargetCount_ = axisBTargetCount;
+
     executeAction(result.action);
 
     return result;
 }
 
-FSMResult PlotterSystem::reportHomingComplete() {
+FSMResult PlotterSystem::reportHomingComplete()
+{
     return dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
 }
 
-FSMResult PlotterSystem::reportFault(FaultCode faultCode) {
-    return dispatchAndExecute(FSMEventType::FAULT_DETECTED, faultCode);
+FSMResult PlotterSystem::reportFault(FaultCode faultCode)
+{
+    return dispatchAndExecute(
+        FSMEventType::FAULT_DETECTED,
+        faultCode);
 }
 
-FSMResult PlotterSystem::resetFault() {
-    return dispatchAndExecute(FSMEventType::FAULT_RESET_REQUESTED);
+FSMResult PlotterSystem::resetFault()
+{
+    return dispatchAndExecute(
+        FSMEventType::FAULT_RESET_REQUESTED);
 }
 
-PlotterState PlotterSystem::state() const {
+PlotterState PlotterSystem::state() const
+{
     return fsm_.state();
 }
 
-bool PlotterSystem::machineZeroKnown() const {
+bool PlotterSystem::machineZeroKnown() const
+{
     return fsm_.machineZeroKnown();
 }
 
-FaultCode PlotterSystem::activeFault() const {
+FaultCode PlotterSystem::activeFault() const
+{
     return fsm_.activeFault();
 }
 
-FSMResult PlotterSystem::dispatchAndExecute(FSMEventType event, FaultCode faultCode) {
-    const FSMResult result = fsm_.dispatch(event, faultCode);
+FSMResult PlotterSystem::dispatchAndExecute(
+    FSMEventType event,
+    FaultCode faultCode)
+{
+    const FSMResult result =
+        fsm_.dispatch(event, faultCode);
 
-    if (result.accepted) {
+    if (result.accepted)
+    {
         executeAction(result.action);
     }
 
     return result;
 }
 
-void PlotterSystem::executeAction(PlotterAction action) {
-    switch (action) {
+void PlotterSystem::executeAction(PlotterAction action)
+{
+    switch (action)
+    {
         case PlotterAction::NONE:
             break;
-        
+
         case PlotterAction::START_HOMING:
             stopAllAxes();
-            // The HomingController will be started here onece its interface is availabel
-            // The system safely remains in HOMING currently
+
+            // HomingController will be started here once its
+            // non-blocking interface is available.
             break;
-        
+
         case PlotterAction::START_MOVING:
-            axisX_.setTargetPosition(pendingAxisXTargetCount_);
-            axisY_.setTargetPosition(pendingAxisYTargetCount_);
+            moveSettling_ = false;
+
+            // startTracking() resets each PID only once.
+            axisA_.startTracking();
+            axisB_.startTracking();
+
+            // Apply the fixed A/B references without resetting the PIDs.
+            axisA_.setReferencePosition(
+                pendingAxisATargetCount_);
+
+            axisB_.setReferencePosition(
+                pendingAxisBTargetCount_);
             break;
 
         case PlotterAction::FINISH_HOMING:
             stopAllAxes();
             break;
-        
+
         case PlotterAction::FINISH_MOVING:
             stopAllAxes();
             break;
-        
+
         case PlotterAction::ENTER_FAULT:
             stopAllAxes();
             break;
 
         case PlotterAction::CLEAR_FAULT:
             stopAllAxes();
-            axisX_.reset();
-            axisY_.reset();
+            axisA_.reset();
+            axisB_.reset();
             break;
     }
 }
 
-void PlotterSystem::updateHoming() {
-    // Compilable placeholder for future homing update logic
-    // waiting for HomingController 
-    // The HomingController will perform one non-blocking homing step here and report HOMING_COMPLETED or a fault.
-
+void PlotterSystem::updateHoming()
+{
+    // Future implementation:
+    //
+    // homingController_.update();
+    //
+    // if (homingController_.isComplete())
+    // {
+    //     dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
+    // }
+    //
+    // if (homingController_.hasFault())
+    // {
+    //     reportFault(homingController_.faultCode());
+    // }
 }
 
-void PlotterSystem::updateMoving() {
+void PlotterSystem::updateMoving()
+{
+    axisA_.update();
+    axisB_.update();
 
-    /* waiting for TrajectoryPlanner and XYCoordinator to be implemented
+    // For the current fixed-target implementation, the movement is
+    // settled when both motor-space controllers remain within tolerance
+    // continuously for the configured settling time.
+    if (!axisA_.isWithinTolerance() ||
+        !axisB_.isWithinTolerance())
+    {
+        moveSettling_ = false;
+        return;
+    }
 
-    const TrajectorySample sample = trajectoryPlanner_.update(dt);
+    const unsigned long currentTimeMicros = micros();
 
-    const AxisReferences references = xyCorrdinator_.referencesAtPathPosition(sample.position);
+    if (!moveSettling_)
+    {
+        moveSettling_ = true;
+        moveSettlingStartMicros_ = currentTimeMicros;
+        return;
+    }
 
-    axisX_.setReferencePosition(references.axisXCount);
-    axisY_.setReferencePosition(references.axisYCount);
+    const unsigned long settledTimeMicros =
+        currentTimeMicros - moveSettlingStartMicros_;
 
-    axisX_.update();
-    axisY_.update();
-
-    if (sample.complete && axisX_.isWithinTolerance() && axisY_.isWithinTolerance()) {
+    if (settledTimeMicros >= MOVE_SETTLE_TIME_MICROS)
+    {
         dispatchAndExecute(FSMEventType::MOVE_COMPLETED);
     }
-    */
-    axisX_.update();
-    axisY_.update();
-
-    if (axisX_.isComplete() && axisY_.isComplete()) {
-        dispatchAndExecute(FSMEventType::MOVE_COMPLETED);
-    }
 }
 
-void PlotterSystem::stopAllAxes() {
-    axisX_.stop();
-    axisY_.stop();
+void PlotterSystem::stopAllAxes()
+{
+    axisA_.stop();
+    axisB_.stop();
+
+    moveSettling_ = false;
 }
 
-}   // namespace plotter
+}  // namespace plotter
