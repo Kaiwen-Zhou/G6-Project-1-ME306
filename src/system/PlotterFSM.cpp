@@ -24,7 +24,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
         }
 
         activeFault_ = faultCode;
-        machineZeroKnown_ = false;
 
         return transitionTo(PlotterState::FAULT, PlotterAction::ENTER_FAULT);
     }
@@ -98,7 +97,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
                 // are required first, will be determined by the external reset policy.
                 case FSMEventType::FAULT_RESET_REQUESTED:
                     activeFault_ = FaultCode::NONE;
-                    machineZeroKnown_ = false;
 
                     return transitionTo(PlotterState::IDLE, PlotterAction::CLEAR_FAULT);
 
