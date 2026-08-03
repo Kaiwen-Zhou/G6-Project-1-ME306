@@ -27,15 +27,6 @@ ISR(TIMER1_COMPA_vect) {
 // Using D68/A14 (PK6)(PCINT22) for encoder A interrupt
 // Using D52 (PB1)(PCINT1) for encoder B interrupt
 
-// === Calculations === //
-// 48 counts per revolution of motor shaft
-// Gear ratio 172:1
-// Only counting change in A output so only counting half the actual counts
-// 48*172*0.5 = 4128 counts per output revolution
-// (2*pi*radius)/(4128 counts) = distance per count
-int radius = 14; // mm // value measured with ruler
-float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.0213
-
 
 // === Future Improvements === //
 // Currently store position data in the form of counts but position in mm and velocity and acceleration potentially needed for control loop. Need to decide if to implement that as part of encoder class or not.
@@ -44,6 +35,7 @@ float distancePerCount = (2 * 3.14159 * radius) / 4128; // mm/count = 0.0213
 #include <Arduino.h>
 #include "hardware/Encoder.h"
 #include "config/PinConfig.h"
+#include "config/SystemConfig.h"
 
 // Pin definitions
 const int encoderApinA = PinConfig::ENCODER_A_PIN_A;    // A14 // Yellow wire 
@@ -73,12 +65,13 @@ Encoder::Encoder(bool isEncoderA) {
 }
 
 void Encoder::initializeEncoderTimer() {
+    // VELOCITY WORK IN PROGGRESS
     // Run this command during setup
     TCCR1A = 0;                             // Reset registers  
     TCCR1B = 0;
     TCNT1 = 0;
 
-    OCR1A = 2499;                            // Set compare match value to correspond to 1ms based on prescaler of 64 and 16MHz clock
+    OCR1A = 2499;                           // Set compare match value to correspond to 10ms based on prescaler of 64 and 16MHz clock
     TCCR1B |= (1 << WGM12);                 // Enable CTC mode
     TCCR1B |= (1 << CS11) | (1 << CS10);    // Set prescaler to 64
     TIMSK1 |= (1 << OCIE1A);                // Enable Timer1 compare interrupt
@@ -110,6 +103,7 @@ void Encoder::update() {
 }
 
 void Encoder::updateVelocity() {
+    // VELOCITY WORK IN PROGGRESS
     velocity = (count - lastCount) /* distancePerCount*/;
     lastCount = count;
 }
@@ -129,9 +123,10 @@ bool Encoder::getDirection() {
 }
 
 float Encoder::getDistance() {
-    return count * distancePerCount;
+    return count * SystemConfig::MOTOR_OUTPUT_DISTANCE_PER_COUNT; // mm
 }
 
 float Encoder::getVelocity() {
+    // VELOCITY WORK IN PROGGRESS
     return velocity;
 }
