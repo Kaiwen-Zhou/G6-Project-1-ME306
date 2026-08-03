@@ -17,11 +17,14 @@ public:
                 // debounceTime - debouncing interval in milliseconds
 
     // Initialise the switch hardware.
-    void begin();
+    void begin(void (*isr)() = nullptr);
 
     //Updates the switch state.
     //Reads the raw input signal, performs software debouncing, and updates the stable state.
     void update();
+
+    // Called only by the ISR if an interrupt is attached to the switch pin.
+    void notifyFromISR();
 
     //Returns true if the switch is pressed.
     //LOW means pressed.
@@ -33,6 +36,11 @@ public:
     //Returns the stable raw digital state. (LOW  = pressed; HIGH = released)
     bool getState() const;
 
+    // One-shot events. Returns true only once when the switch is pressed or released.
+    bool consumePressedEvent();
+    bool consumeReleasedEvent();
+    bool consumeRejectedInterruptEvent();
+
 private:
     uint8_t pinNumber; // Arduino pin connected to the switch
 
@@ -40,11 +48,20 @@ private:
 
     unsigned long debounceDelay; // Debounce time delay in ms
 
-    bool stableState; // Debounced stable state
+    volatile bool stableState; // Debounced stable state
 
-    bool lastReading; // Previous raw reading
+    volatile bool lastReading; // Previous raw reading
 
-    unsigned long lastDebounceTime; // Time when the last state change occurred
+    volatile unsigned long lastDebounceTime; // Time when the last state change occurred
+    volatile bool interruptPending; // Flag to indicate if an interrupt has occurred
+
+    bool verificationActive; // Flag to indicate if verification is active
+
+    bool pressedEvent; // Flag to indicate if a pressed event has occurred
+
+    bool releasedEvent; // Flag to indicate if a released event has occurred
+
+    bool rejectedInterruptEvent; // Flag to indicate if a rejected interrupt event has occurred
 };
 
 #endif
