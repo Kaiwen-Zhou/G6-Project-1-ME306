@@ -2,6 +2,9 @@
 #define HOMING_CONTROLLER_H
 
 #include <Arduino.h>
+#include "hardware/LimitSwitch.h"
+#include "control/AxisController.h"
+
 // Non-blocking HomingController skeleton
 // Manage the homing process of a stepper motor using limit switches and a state machine.
 class HomingController
@@ -50,14 +53,20 @@ public:
     // Assign the current position as the zero reference
     void assignZero();
 
-    // Mock switch trigger for testing stage transitions before hardware is connected
-    void mockSwitchTriggered(); 
+    // Mock interface for testing without hardware
+    void switchTriggered(ExpectedSwitch sw);
 
     // Get the current homing stage
     HomingStage getStage() const;
 
     // Get the expected limit switch state for the current stage
     ExpectedSwitch getExpectedSwitch() const;
+
+    // Connect the motor-space controllers to the homing controller for coordinated homing operations
+    void attachAxes(AxisController* xAxis, AxisController* yAxis);
+
+    // Connect the four limit switches
+    void attachLimitSwitches(LimitSwitch* xMin, LimitSwitch* xMax, LimitSwitch* yMin, LimitSwitch* yMax);
 
 private:
     // Change the homing stage 
@@ -66,7 +75,6 @@ private:
     // Start the timeout timer
     void resetStageTimer();
     
-private:
     HomingStage stage; // Current homing stage
 
     ExpectedSwitch expectedSwitch; // Expected limit switch state for the current stage
@@ -75,7 +83,13 @@ private:
 
     unsigned long timeoutMs; // Maximum time allowed for the homing process before aborting
 
-    bool mockSwitchPressed; // Flag to simulate a limit switch press for testing stage transitions
+    AxisController* xAxis_; 
+    AxisController* yAxis_;
+
+    LimitSwitch* xMinSwitch_;
+    LimitSwitch* xMaxSwitch_;
+    LimitSwitch* yMinSwitch_;
+    LimitSwitch* yMaxSwitch_;
 };
 
 #endif // HOMING_CONTROLLER_H
