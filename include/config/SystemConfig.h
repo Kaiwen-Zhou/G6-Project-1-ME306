@@ -10,7 +10,7 @@ namespace SystemConfig
         INPUT_PULLUP;
 
     constexpr unsigned long LIMIT_SWITCH_DEBOUNCE_MS =
-        20UL;
+        200UL;
 
     constexpr uint8_t MOTOR_DEFAULT_OUTPUT_LIMIT =
         255;
