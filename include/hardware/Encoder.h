@@ -5,12 +5,21 @@
 
 class Encoder {
   public:
+    struct CountPair {
+      int32_t countA;
+      int32_t countB;
+    };
+
     Encoder(bool isEncoderA);
     void initializeEncoderTimer();
     void update();
     void updateVelocity();
     void zeroCount();
     int32_t getCount();
+
+    // snapshot two encoders at one instant
+    static CountPair getCountPair(const Encoder& encoderA, const Encoder& encoderB);
+
     bool getDirection();
     float getDistance();
     float getVelocity();

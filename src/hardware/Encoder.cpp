@@ -33,6 +33,7 @@ ISR(TIMER1_COMPA_vect) {
 // More fault checking and need to implement how system is notified when faults occured. Currently just prints error message to serial
 
 #include <Arduino.h>
+#include <util/atomic.h>
 #include "hardware/Encoder.h"
 #include "config/PinConfig.h"
 #include "config/SystemConfig.h"
@@ -115,7 +116,24 @@ void Encoder::zeroCount() {
 }
 
 int32_t Encoder::getCount() {
-    return count;
+    int32_t countSnapshot;
+
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        countSnapshot = count;
+    }
+    
+    return countSnapshot;
+}
+
+Encoder::CountPair Encoder::getCountPair(const Encoder& encoderA, const Encoder& encoderB) {
+    CountPair snapshot;
+
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        snapshot.countA = encoderA.count;
+        snapshot.countB = encoderB.count;
+    }
+
+    return snapshot;
 }
 
 bool Encoder::getDirection() {
