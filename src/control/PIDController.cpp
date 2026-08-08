@@ -1,127 +1,147 @@
 #include "control/PIDController.h"
 
-PIDController::PIDController(float proportionalGain,
-                             float integralGain,
-                             float minimumOutput,
-                             float maximumOutput,
-                             float minimumIntegralOutput,
-                             float maximumIntegralOutput)
+namespace
+{
+float clampValue(float value, float minimumValue, float maximumValue) {
+    if (value < minimumValue)
+    {
+        return minimumValue;
+    }
+
+    if (value > maximumValue)
+    {
+        return maximumValue;
+    }
+
+    return value;
+}
+
+void orderLimits(float& minimumValue, float& maximumValue) {
+    if (minimumValue > maximumValue)
+    {
+        const float temporaryValue = minimumValue;
+        minimumValue = maximumValue;
+        maximumValue = temporaryValue;
+    }
+}
+}
+
+PIDController::PIDController(
+    float proportionalGain,
+    float integralGain,
+    float minimumOutput,
+    float maximumOutput,
+    float minimumIntegralOutput,
+    float maximumIntegralOutput,
+    float velocityFeedforwardGain)
     : proportionalGain_(proportionalGain),
       integralGain_(integralGain),
+      velocityFeedforwardGain_(velocityFeedforwardGain),
       integralOutput_(0.0f),
       minimumOutput_(minimumOutput),
       maximumOutput_(maximumOutput),
       minimumIntegralOutput_(minimumIntegralOutput),
       maximumIntegralOutput_(maximumIntegralOutput)
 {
+    orderLimits(minimumOutput_, maximumOutput_);
+    orderLimits(minimumIntegralOutput_, maximumIntegralOutput_);
 }
 
-float PIDController::update(float error, float timeStepSeconds)
-{
+float PIDController::update( float error, float targetVelocityCountsPerSecond, float timeStepSeconds) {
     const float proportionalOutput = proportionalGain_ * error;
 
-    float proposedIntegralOutput = integralOutput_;
+    const float feedforwardOutput = velocityFeedforwardGain_ * targetVelocityCountsPerSecond;
 
-    // I(k) = I(k-1) + Ki * error(k) * dt
-    // A non-positive dt skips integration but still allows proportional output.
-    if (timeStepSeconds > 0.0f)
-    {
-        proposedIntegralOutput +=
+    if (timeStepSeconds > 0.0f) {
+        const float integralChange =
             integralGain_ * error * timeStepSeconds;
+
+        const float candidateIntegralOutput =
+            clampValue(
+                integralOutput_ + integralChange,
+                minimumIntegralOutput_,
+                maximumIntegralOutput_);
+
+        const float candidateControllerOutput =
+            proportionalOutput +
+            candidateIntegralOutput +
+            feedforwardOutput;
+
+        // Conditional integration anti-windup:
+        // do not accumulate more integral when it would push an
+        // already saturated output further into saturation.
+        const bool pushesFurtherAboveMaximum =
+            candidateControllerOutput > maximumOutput_ && integralChange > 0.0f;
+
+        const bool pushesFurtherBelowMinimum =
+            candidateControllerOutput < minimumOutput_ && integralChange < 0.0f;
+
+        if (!pushesFurtherAboveMaximum && !pushesFurtherBelowMinimum) {
+            integralOutput_ = candidateIntegralOutput;
+        }
     }
 
-    // Limit the stored integral contribution.
-    if (proposedIntegralOutput > maximumIntegralOutput_)
-    {
-        proposedIntegralOutput = maximumIntegralOutput_;
-    }
-    else if (proposedIntegralOutput < minimumIntegralOutput_)
-    {
-        proposedIntegralOutput = minimumIntegralOutput_;
-    }
+    const float controllerOutput =
+        proportionalOutput +
+        integralOutput_ +
+        feedforwardOutput;
 
-    const float proposedOutput =
-        proportionalOutput + proposedIntegralOutput;
-
-    const float integralChange =
-        proposedIntegralOutput - integralOutput_;
-
-    // Conditional integration anti-windup:
-    // block an integral change only when it would push a saturated output
-    // farther into saturation. A change in the opposite direction is accepted,
-    // so the integral can unwind after the error reverses.
-    const bool pushesFurtherAboveMaximum =
-        proposedOutput > maximumOutput_ && integralChange > 0.0f;
-
-    const bool pushesFurtherBelowMinimum =
-        proposedOutput < minimumOutput_ && integralChange < 0.0f;
-
-    if (!pushesFurtherAboveMaximum && !pushesFurtherBelowMinimum)
-    {
-        integralOutput_ = proposedIntegralOutput;
-    }
-
-    float output = proportionalOutput + integralOutput_;
-
-    // Limit the final command sent to the next control module.
-    if (output > maximumOutput_)
-    {
-        output = maximumOutput_;
-    }
-    else if (output < minimumOutput_)
-    {
-        output = minimumOutput_;
-    }
-
-    return output;
+    return clampValue(
+        controllerOutput,
+        minimumOutput_,
+        maximumOutput_);
 }
 
-void PIDController::reset()
-{
+float PIDController::update( float error, float timeStepSeconds) {
+    return update(error, 0.0f, timeStepSeconds);
+}
+
+void PIDController::reset() {
     integralOutput_ = 0.0f;
 }
 
-void PIDController::setGains(float proportionalGain, float integralGain)
-{
+void PIDController::setGains(float proportionalGain, float integralGain) {
     proportionalGain_ = proportionalGain;
     integralGain_ = integralGain;
 }
 
-void PIDController::setOutputLimits(float minimumOutput,
-                                    float maximumOutput)
-{
+void PIDController::setVelocityFeedforwardGain(float velocityFeedforwardGain) {
+    velocityFeedforwardGain_ = velocityFeedforwardGain;
+}
+
+void PIDController::setOutputLimits(float minimumOutput, float maximumOutput) {
+    orderLimits(minimumOutput, maximumOutput);
+
     minimumOutput_ = minimumOutput;
     maximumOutput_ = maximumOutput;
 }
 
-void PIDController::setIntegralLimits(float minimumIntegralOutput,
-                                      float maximumIntegralOutput)
-{
+void PIDController::setIntegralLimits(float minimumIntegralOutput, float maximumIntegralOutput) {
+    orderLimits(minimumIntegralOutput, maximumIntegralOutput);
+
     minimumIntegralOutput_ = minimumIntegralOutput;
+
     maximumIntegralOutput_ = maximumIntegralOutput;
 
-    // Keep the existing state inside the newly configured limits.
-    if (integralOutput_ > maximumIntegralOutput_)
-    {
-        integralOutput_ = maximumIntegralOutput_;
-    }
-    else if (integralOutput_ < minimumIntegralOutput_)
-    {
-        integralOutput_ = minimumIntegralOutput_;
-    }
+    integralOutput_ =
+        clampValue(
+            integralOutput_,
+            minimumIntegralOutput_,
+            maximumIntegralOutput_);
 }
 
-float PIDController::getProportionalGain() const
-{
+float PIDController::getProportionalGain() const {
     return proportionalGain_;
 }
 
-float PIDController::getIntegralGain() const
-{
+float PIDController::getIntegralGain() const {
     return integralGain_;
 }
 
-float PIDController::getIntegralOutput() const
-{
+float PIDController::getVelocityFeedforwardGain() const {
+    return velocityFeedforwardGain_;
+}
+
+float PIDController::getIntegralOutput() const {
     return integralOutput_;
 }
