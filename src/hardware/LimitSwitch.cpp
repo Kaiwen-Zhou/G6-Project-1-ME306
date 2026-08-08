@@ -44,7 +44,7 @@ void LimitSwitch::begin(void (*isr)())
         attachInterrupt(
             digitalPinToInterrupt(pinNumber),
             isr,
-            FALLING);
+            RISING);
     }
 }
 
@@ -75,15 +75,15 @@ void LimitSwitch::update()
         {
             currentReading = digitalRead(pinNumber);
             // If the switch is still pressed, accept it as a valid press event
-            if (currentReading == LOW)
+            if (currentReading == HIGH)
             {
-                if (stableState != LOW)
+                if (stableState != HIGH)
                 {
-                    stableState = LOW;
+                    stableState = HIGH;
                     pressedEvent = true;
 
                     // Modified: Keep the lastReading consistent so the pooling debounce does not immediately restart.
-                    lastReading = LOW;
+                    lastReading = HIGH;
                 }
             }
             // If the switch is released, clear the verification flag
@@ -110,7 +110,7 @@ void LimitSwitch::update()
         {
             stableState = currentReading;
 
-            if (stableState == LOW)
+            if (stableState == HIGH)
             {
                 pressedEvent = true;
             }

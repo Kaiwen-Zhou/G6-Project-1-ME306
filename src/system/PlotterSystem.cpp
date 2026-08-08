@@ -16,11 +16,13 @@ PlotterSystem::PlotterSystem(
     AxisController& axisA,
     AxisController& axisB,
     XYCoordinator& xyCoordinator,
-    TrajectoryPlanner& trajectoryPlanner)
+    TrajectoryPlanner& trajectoryPlanner,
+    HomingController& homingController)
     : axisA_(axisA),
       axisB_(axisB),
       xyCoordinator_(xyCoordinator),
       trajectoryPlanner_(trajectoryPlanner),
+      homingController_(homingController),
       pendingXDisplacementMm_(0.0f),
       pendingYDisplacementMm_(0.0f),
       pendingFeedrateMmPerMinute_(0.0f),
@@ -35,6 +37,7 @@ void PlotterSystem::begin() {
     // XYCoordinator owns the coordinated A/B control lifecycle and
     // initialises both AxisController instances.
     xyCoordinator_.begin();
+    homingController_.begin();
 
     fsm_.begin();
 
@@ -103,10 +106,6 @@ FSMResult PlotterSystem::requestMove(
     return result;
 }
 
-FSMResult PlotterSystem::reportHomingComplete() {
-    return dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
-}
-
 FSMResult PlotterSystem::reportFault(FaultCode faultCode) {
     return dispatchAndExecute( FSMEventType::FAULT_DETECTED, faultCode);
 }
@@ -145,8 +144,9 @@ void PlotterSystem::executeAction(PlotterAction action) {
         case PlotterAction::START_HOMING:
             stopAllMotion();
 
-            // HomingController will be started here when its current
-            // interface is integrated.
+            if (!homingController_.start()) {
+                reportFault(mapHomingFault(homingController_.fault()));
+            }
             break;
 
         case PlotterAction::START_MOVING:
@@ -191,6 +191,16 @@ void PlotterSystem::executeAction(PlotterAction action) {
         }
 
         case PlotterAction::FINISH_HOMING:
+            trajectoryPlanner_.stop();
+            homingController_.stop();
+
+            // HomingController has set both encoder counts to zero
+            // Re-synchronise both motor-space controllers to that zero
+            xyCoordinator_.reset();
+
+            moveSettling_ = false;
+            break;
+
         case PlotterAction::FINISH_MOVING:
         case PlotterAction::ENTER_FAULT:
         case PlotterAction::CLEAR_FAULT:
@@ -200,21 +210,16 @@ void PlotterSystem::executeAction(PlotterAction action) {
 }
 
 void PlotterSystem::updateHoming() {
-    // Future implementation:
-    //
-    // homingController_.update();
-    //
-    // if (homingController_.isComplete())
-    // {
-    //     dispatchAndExecute(
-    //         FSMEventType::HOMING_COMPLETED);
-    // }
-    //
-    // if (homingController_.hasFault())
-    // {
-    //     reportFault(
-    //         homingController_.faultCode());
-    // }
+    homingController_.update();
+
+    if (homingController_.hasFault()) {
+        reportFault(mapHomingFault(homingController_.fault()));
+        return;
+    }
+
+    if (homingController_.isComplete()) {
+        dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
+    }
 }
 
 void PlotterSystem::updateMoving() {
@@ -276,6 +281,25 @@ void PlotterSystem::stopAllMotion() {
     xyCoordinator_.stop();
 
     moveSettling_ = false;
+}
+
+FaultCode PlotterSystem::mapHomingFault(HomingFault fault) {
+    switch (fault) {
+        case HomingFault::TIMEOUT:
+            return FaultCode::HOMING_TIMEOUT;
+
+        case HomingFault::WRONG_LIMIT:
+            return FaultCode::WRONG_HOMING_LIMIT;
+        
+        case HomingFault::CONTRADICTORY_LIMITS:
+            return FaultCode::CONTRADICTORY_LIMITS;
+
+        case HomingFault::INVALID_CONFIGURATION:
+        case HomingFault::NONE:
+            return FaultCode::INTERNAL_ERROR;
+    }
+
+    return FaultCode::INTERNAL_ERROR;
 }
 
 }  // namespace plotter

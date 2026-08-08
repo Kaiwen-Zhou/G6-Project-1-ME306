@@ -47,12 +47,6 @@ void setMillis(unsigned long value)
     fakeMicros = value * 1000UL;
 }
 
-void setMicros(unsigned long value)
-{
-    fakeMicros = value;
-    fakeMillis = value / 1000UL;
-}
-
 void advanceMillis(unsigned long change)
 {
     fakeMillis += change;

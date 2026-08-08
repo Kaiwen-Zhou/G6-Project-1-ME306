@@ -96,6 +96,14 @@ int32_t Encoder::getCount() {
     return snapshot;
 }
 
+void Encoder::zeroCountPair(Encoder& encoderA, Encoder& encoderB) {
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+    {
+        encoderA.count_ = 0;
+        encoderB.count_ = 0;
+    }
+}
+
 Encoder::CountPair Encoder::getCountPair(const Encoder& encoderA, const Encoder& encoderB) {
     CountPair snapshot;
 

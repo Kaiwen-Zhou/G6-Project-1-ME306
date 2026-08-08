@@ -1,95 +1,174 @@
-#ifndef HOMING_CONTROLLER_H
-#define HOMING_CONTROLLER_H
+#pragma once
 
-#include <Arduino.h>
+#include <stdint.h>
+
+#include "control/Converter.h"
+#include "hardware/Encoder.h"
 #include "hardware/LimitSwitch.h"
-#include "control/AxisController.h"
+#include "hardware/MotorDriver.h"
 
-// Non-blocking HomingController skeleton
-// Manage the homing process of a stepper motor using limit switches and a state machine.
-class HomingController
-{
-public:
-    // Homing state machine states
-    enum class HomingStage
-    {
-        IDLE, // No homing in process
-        START, // Start homing process
-        HOME_X, // Home X axis
-        HOME_Y, // Home Y axis
-        ZERO_POSITION, // Set the current position as the zero reference
-        COMPLETE, // Homing process complete
-        ABORT // Homing process aborted due to error
-    };
-
-    // Expected limit switch states for homing
-    enum class ExpectedSwitch
-    {
-        NONE, // No limit switch expected
-        // Expected X limit switch state
-        X_MIN,
-        X_MAX,
-        // Expected Y limit switch state
-        Y_MIN,
-        Y_MAX
-    };
-
-    // Constructor
-    explicit HomingController(unsigned long timeout = 5000); // Default timeout of 5 seconds
-    // timeout = Maximum time allowed for the homing process before aborting 
-
-    // Initialise the controller
-    void begin();
-
-    // Start the homing process
-    void start();
-
-    // Update the homing process (non-blocking)
-    void update();
-
-    // Abort the homing process
-    void abort();
-
-    // Assign the current position as the zero reference
-    void assignZero();
-
-    // Mock interface for testing without hardware
-    void switchTriggered(ExpectedSwitch sw);
-
-    // Get the current homing stage
-    HomingStage getStage() const;
-
-    // Get the expected limit switch state for the current stage
-    ExpectedSwitch getExpectedSwitch() const;
-
-    // Connect the motor-space controllers to the homing controller for coordinated homing operations
-    void attachAxes(AxisController* xAxis, AxisController* yAxis);
-
-    // Connect the four limit switches
-    void attachLimitSwitches(LimitSwitch* xMin, LimitSwitch* xMax, LimitSwitch* yMin, LimitSwitch* yMax);
-
-private:
-    // Change the homing stage 
-    void changeStage(HomingStage newStage);
-
-    // Start the timeout timer
-    void resetStageTimer();
-    
-    HomingStage stage; // Current homing stage
-
-    ExpectedSwitch expectedSwitch; // Expected limit switch state for the current stage
-
-    unsigned long stageStartTime; // Time when the current stage started
-
-    unsigned long timeoutMs; // Maximum time allowed for the homing process before aborting
-
-    AxisController* xAxis_; 
-    AxisController* yAxis_;
-
-    LimitSwitch* xMinSwitch_;
-    LimitSwitch* xMaxSwitch_;
-    LimitSwitch* yMinSwitch_;
-    LimitSwitch* yMaxSwitch_;
+enum class HomingStage : uint8_t {
+    IDLE,
+    X_MAX,
+    X_ORIGIN,
+    Y_MAX,
+    Y_ORIGIN,
+    COMPLETE,
+    ABORTED
 };
 
-#endif // HOMING_CONTROLLER_H
+enum class HomingPhase : uint8_t {
+    IDLE,
+    COARSE_APPROACH,
+    CONTACT_PAUSE,
+    BACKOFF,
+    FINE_APPROACH,
+    FINE_CONTACT_PAUSE,
+    FINAL_RELEASE,
+    RECORD_POSITION,
+    COMPLETE,
+    ABORTED
+};
+
+enum class ExpectedSwitch : uint8_t {
+    X_MIN = 0,
+    X_MAX = 1,
+    Y_MIN = 2,
+    Y_MAX = 3,
+    NONE = 255
+};
+
+enum class HomingFault : uint8_t {
+    NONE,
+    TIMEOUT,
+    WRONG_LIMIT,
+    CONTRADICTORY_LIMITS,
+    INVALID_CONFIGURATION
+};
+
+struct HomingConfig {
+    uint8_t coarseApproachPwm;
+    uint8_t backoffPwm;
+    uint8_t fineApproachPwm;
+    uint8_t finalReleasePwm;
+
+    float backoffDistanceMm;
+
+    unsigned long contactPauseMs;
+    unsigned long fineContactPauseMs;
+    unsigned long searchTimeoutMs;
+    unsigned long backoffTimeoutMs;
+    unsigned long finalReleaseTimeoutMs;
+    unsigned long overallTimeoutMs;
+};
+
+struct HomingResult {
+    Encoder::CountPair xMaximum;
+    Encoder::CountPair xOrigin;
+    Encoder::CountPair yMaximum;
+    Encoder::CountPair yOrigin;
+
+    float xTravelMm;
+    float yTravelMm;
+
+    bool xValid;
+    bool yValid;
+};
+
+class HomingController {
+public:
+    HomingController(
+        Encoder& encoderA,
+        Encoder& encoderB,
+        MotorDriver& motorA,
+        MotorDriver& motorB,
+        const Converter& converter,
+        LimitSwitch& xMinSwitch,
+        LimitSwitch& xMaxSwitch,
+        LimitSwitch& yMinSwitch,
+        LimitSwitch& yMaxSwitch,
+        const HomingConfig& config);
+
+    // LimitSwitch::begin(...) and the ISR wiring remain hardware-startup
+    // responsibilities. This method only resets homing state.
+    void begin();
+
+    // Returns false only when homing cannot be started safely.
+    bool start();
+
+    // Execute at most one non-blocking state-machine step.
+    void update();
+
+    // Immediately stop open-loop homing motion.
+    void stop();
+
+    bool isActive() const;
+    bool isComplete() const;
+    bool hasFault() const;
+
+    HomingStage stage() const;
+    HomingPhase phase() const;
+    ExpectedSwitch expectedSwitch() const;
+    HomingFault fault() const;
+    HomingResult result() const;
+
+private:
+    static constexpr uint8_t LIMIT_SWITCH_COUNT = 4;
+
+    void beginTarget(HomingStage nextStage);
+    void setPhase(HomingPhase nextPhase);
+    void advanceAfterFineContact();
+
+    void updateAllSwitches();
+    void clearSwitchEvents();
+    bool hasContradictoryLimits() const;
+    bool hasUnexpectedLimit();
+
+    LimitSwitch& switchFor(ExpectedSwitch expected);
+
+    int8_t targetXDirection() const;
+    int8_t targetYDirection() const;
+
+    void driveTowardTarget(uint8_t pwm);
+    void driveAwayFromTarget(uint8_t pwm);
+    void driveCartesian(int8_t xDirection, int8_t yDirection, uint8_t pwm);
+    void stopMotors();
+
+    float distanceFromFirstContactMm() const;
+    void recordCurrentTarget();
+
+    bool phaseTimedOut(unsigned long timeoutMs) const;
+    bool configurationIsValid() const;
+    void fail(HomingFault fault);
+
+    Encoder& encoderA_;
+    Encoder& encoderB_;
+
+    MotorDriver& motorA_;
+    MotorDriver& motorB_;
+
+    const Converter& converter_;
+
+    LimitSwitch* limitSwitches_[LIMIT_SWITCH_COUNT];
+
+    HomingConfig config_;
+    HomingResult result_;
+
+    Encoder::CountPair firstContactCounts_;
+    Encoder::CountPair releaseCounts_;
+
+    HomingStage stage_;
+    HomingPhase phase_;
+    ExpectedSwitch expectedSwitch_;
+    HomingFault fault_;
+
+    unsigned long overallStartMs_;
+    unsigned long phaseStartMs_;
+
+    // A non-expected switch that is already pressed at the start of a
+    // target is allowed until it releases. If it presses again later,
+    // it is treated as the wrong limit.
+    uint8_t allowedPressedMask_;
+
+    bool active_;
+};

@@ -5,6 +5,7 @@
 #include "system/PlotterFSM.h"
 #include "system/TrajectoryPlanner.h"
 #include "control/AxisController.h"
+#include "control/HomingController.h"
 #include "control/XYCoordinator.h"
 
 /**
@@ -47,7 +48,8 @@ public:
         AxisController& axisA,
         AxisController& axisB,
         XYCoordinator& xyCoordinator,
-        TrajectoryPlanner& trajectoryPlanner);
+        TrajectoryPlanner& trajectoryPlanner,
+        HomingController& homingController);
 
     void begin();
     void update();
@@ -66,7 +68,6 @@ public:
         float feedrateMmPerMinute,
         float maxAccelerationMmPerSecondSquared);
 
-    FSMResult reportHomingComplete();
     FSMResult reportFault(FaultCode faultCode);
     FSMResult resetFault();
 
@@ -82,6 +83,7 @@ private:
     void updateHoming();
     void updateMoving();
     void stopAllMotion();
+    static FaultCode mapHomingFault(HomingFault fault);
 
     PlotterFSM fsm_;
 
@@ -92,6 +94,7 @@ private:
 
     XYCoordinator& xyCoordinator_;
     TrajectoryPlanner& trajectoryPlanner_;
+    HomingController& homingController_;
 
     float pendingXDisplacementMm_;
     float pendingYDisplacementMm_;

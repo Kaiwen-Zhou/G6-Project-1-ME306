@@ -19,6 +19,8 @@ class Encoder {
     
     int32_t getCount();
 
+    static void zeroCountPair(Encoder& encoderA, Encoder& encoderB);
+
     // Read both 32-bit counts within one atomic block.
     static CountPair getCountPair(const Encoder& encoderA, const Encoder& encoderB);
 
