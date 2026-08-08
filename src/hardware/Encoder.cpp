@@ -47,104 +47,67 @@ const int encoderBpinB = PinConfig::ENCODER_B_PIN_B;    // White wire
 Encoder::Encoder(bool isEncoderA) {
     // Initialize the encoder pins and set them as inputs
     if (isEncoderA)  {
-        pinA = encoderApinA;
-        pinB = encoderApinB;
+        pinA_ = encoderApinA;
+        pinB_ = encoderApinB;
         // Setup pin change interrupt for encoder A pin D68 (PCINT22)
         PCICR |= (1 << PCIE2); // Enable Pin Change Interrupt Control Register
         PCMSK2 |= (1 << PCINT22); // Enable interrupt for pin D68
     } else {
-        pinA = encoderBpinA;
-        pinB = encoderBpinB;
+        pinA_ = encoderBpinA;
+        pinB_ = encoderBpinB;
         // Setup pin change interrupt for encoder B pin D52 (PCINT1)
         PCICR |= (1 << PCIE0); // Enable Pin Change Interrupt Control Register
         PCMSK0 |= (1 << PCINT1); // Enable interrupt for pin D52
     }
-    pinMode(pinA, INPUT);
-    pinMode(pinB, INPUT);
-    Aprev = digitalRead(pinA);
-    Bprev = digitalRead(pinB);
+    pinMode(pinA_, INPUT);
+    pinMode(pinB_, INPUT);
 }
 
-void Encoder::initializeEncoderTimer() {
-    // VELOCITY WORK IN PROGGRESS
-    // Run this command during setup
-    TCCR1A = 0;                             // Reset registers  
-    TCCR1B = 0;
-    TCNT1 = 0;
+void Encoder::update()
+{
+    const bool currentA = digitalRead(pinA_);
+    const bool currentB = digitalRead(pinB_);
 
-    OCR1A = 2499;                           // Set compare match value to correspond to 10ms based on prescaler of 64 and 16MHz clock
-    TCCR1B |= (1 << WGM12);                 // Enable CTC mode
-    TCCR1B |= (1 << CS11) | (1 << CS10);    // Set prescaler to 64
-    TIMSK1 |= (1 << OCIE1A);                // Enable Timer1 compare interrupt
-}
+    direction_ = (currentA == currentB);
 
-void Encoder::update() {
-    /*
-    Update should only be called during pin change interrupts for pinA. This ensures that the encoder is updated only when there is a change in the state of pinA (the motor is turning)
-    */
-    Acur = digitalRead(pinA);
-    Bcur = digitalRead(pinB);
-
-    // Direction is true for clockwise and false for counter clockwise
-    // COULD RENAME GET DIRECTION FUNCTION TO INDICATE IF TURNING CLOCKWISE OR COUNTER CLOCKWISE
-    direction = (Acur == Bcur);
-
-    // Increment counter in direction of movement
-    if (direction) {
-        count++;
-    } else {
-        count--;
+    if (direction_)
+    {
+        ++count_;
     }
-
-    Aprev = Acur;
-    Bprev = Bcur;
-
-    // TODO
-    // implement check to fault if enocder is moving to fast for function to keep up with. If both A and B have changed values or Aprev = Acur or could implement a timer to check if the time between updates is too short 
-}
-
-void Encoder::updateVelocity() {
-    // VELOCITY WORK IN PROGGRESS
-    velocity = (count - lastCount) /* distancePerCount*/;
-    lastCount = count;
+    else
+    {
+        --count_;
+    }
 }
 
 void Encoder::zeroCount() {
-    count = 0;
-    lastCount = 0;
-    velocity = 0;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        count_ = 0;
+    }
 }
 
 int32_t Encoder::getCount() {
-    int32_t countSnapshot;
+    int32_t snapshot;
 
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        countSnapshot = count;
+        snapshot = count_;
     }
-    
-    return countSnapshot;
+
+    return snapshot;
 }
 
 Encoder::CountPair Encoder::getCountPair(const Encoder& encoderA, const Encoder& encoderB) {
     CountPair snapshot;
 
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        snapshot.countA = encoderA.count;
-        snapshot.countB = encoderB.count;
+        snapshot.countA = encoderA.count_;
+        snapshot.countB = encoderB.count_;
     }
 
     return snapshot;
 }
 
-bool Encoder::getDirection() {
-    return direction;
+bool Encoder::getDirection() const {
+    return direction_;
 }
 
-float Encoder::getDistance() {
-    return count * SystemConfig::MOTOR_OUTPUT_DISTANCE_PER_COUNT; // mm
-}
-
-float Encoder::getVelocity() {
-    // VELOCITY WORK IN PROGGRESS
-    return velocity;
-}
