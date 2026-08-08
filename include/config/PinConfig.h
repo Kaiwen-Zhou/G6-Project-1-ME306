@@ -26,7 +26,7 @@ namespace PinConfig
     constexpr uint8_t ENCODER_B_PIN_A = 52;
     constexpr uint8_t ENCODER_B_PIN_B = 53;
 
-    // Active-low limit switches
+    // Active-high limit switches
     // Each switch has its own external-interrupt pin.
     constexpr uint8_t LIMIT_SWITCH_LEFT_PIN   = 2;
     constexpr uint8_t LIMIT_SWITCH_RIGHT_PIN  = 3;

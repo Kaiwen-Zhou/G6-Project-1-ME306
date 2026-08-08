@@ -2,8 +2,11 @@
 
 #include <stdint.h>
 
-#include "PlotterFSM.h"
+#include "system/PlotterFSM.h"
+#include "system/TrajectoryPlanner.h"
 #include "control/AxisController.h"
+#include "control/HomingController.h"
+#include "control/XYCoordinator.h"
 
 /**
  * PlotterSystem.h
@@ -17,58 +20,92 @@
  * The first version deliberately leaves the physical homing sequence and
  * Cartesian trajectory generation outside this class. Move targets are motor
  * encoder counts (A and B), not Cartesian X-Y coordinates.
+ * 
  */
 
-namespace plotter {
+namespace plotter
+{
 
-class PlotterSystem {
- public:
-    PlotterSystem(AxisController& axisA, AxisController& axisB);
+/**
+ * Top-level operation coordinator.
+ *
+ * For MOVING:
+ *
+ * TrajectoryPlanner
+ *     -> Cartesian displacement and velocity reference
+ * XYCoordinator
+ *     -> synchronized A/B motor-space references
+ * AxisController
+ *     -> PID and motor output
+ *
+ * G1 X/Y values are treated as displacement relative to the beginning
+ * of the current move.
+ */
+class PlotterSystem
+{
+public:
+    PlotterSystem(
+        AxisController& axisA,
+        AxisController& axisB,
+        XYCoordinator& xyCoordinator,
+        TrajectoryPlanner& trajectoryPlanner,
+        HomingController& homingController);
 
-    // Initialise both axes and automatically enter the startup HOMING state.
     void begin();
-
-    // Call repeatedly from loop(). All operation updates remain non-blocking.
     void update();
 
-    // High-level command/event entry points.
     FSMResult requestHoming();
-    FSMResult requestMove(int32_t axisATargetCount, int32_t axisBTargetCount);
 
-    // Call only after the homing module has stopped the mechanism and zeroed
-    // both encoder counts successfully.
-    FSMResult reportHomingComplete();
+    // Request one relative Cartesian move.
+    //
+    // xDisplacementMm and yDisplacementMm are relative to the beginning
+    // of this move.
+    //
+    // feedrateMmPerMinute corresponds to the G1 F value.
+    FSMResult requestMove(
+        float xDisplacementMm,
+        float yDisplacementMm,
+        float feedrateMmPerMinute,
+        float maxAccelerationMmPerSecondSquared);
 
-    // Safety/fault entry point. FaultCode::NONE is rejected by the FSM.
     FSMResult reportFault(FaultCode faultCode);
-
-    // Clear a latched fault and return to IDLE. The FSM decides whether the
-    // previously established machine zero remains known.
     FSMResult resetFault();
 
     PlotterState state() const;
     bool machineZeroKnown() const;
     FaultCode activeFault() const;
 
- private:
-    FSMResult dispatchAndExecute(
-        FSMEventType event,
-        FaultCode faultCode = FaultCode::NONE);
+private:
+    FSMResult dispatchAndExecute(FSMEventType event, FaultCode faultCode = FaultCode::NONE);
 
     void executeAction(PlotterAction action);
+
     void updateHoming();
     void updateMoving();
-    void stopAllAxes();
+    void stopAllMotion();
+    static FaultCode mapHomingFault(HomingFault fault);
 
     PlotterFSM fsm_;
+
+    // Axis references are retained so PlotterSystem can check whether
+    // both final motor-space references have settled.
     AxisController& axisA_;
     AxisController& axisB_;
 
-    int32_t pendingAxisATargetCount_;
-    int32_t pendingAxisBTargetCount_;
+    XYCoordinator& xyCoordinator_;
+    TrajectoryPlanner& trajectoryPlanner_;
+    HomingController& homingController_;
+
+    float pendingXDisplacementMm_;
+    float pendingYDisplacementMm_;
+    float pendingFeedrateMmPerMinute_;
+    float pendingAccelerationMmPerSecondSquared_;
+
+    unsigned long lastTrajectoryUpdateMicros_;
 
     bool moveSettling_;
     unsigned long moveSettlingStartMicros_;
 };
 
 }  // namespace plotter
+

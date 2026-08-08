@@ -5,151 +5,227 @@
 namespace
 {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
+
+float makeNonNegative(float value){
+    return value < 0.0f ? -value : value;
+}
 }
 
-AxisController::AxisController(Encoder& encoder,
-                               PIDController& pidController,
-                               MotorDriver& motor,
-                               int32_t positionTolerance,
-                               unsigned long updateIntervalMicros)
-    : encoder_(encoder),
+AxisController::AxisController(PIDController& pidController, MotorDriver& motor, float positionTolerance)
+    : legacyEncoder_(nullptr),
       pidController_(pidController),
       motor_(motor),
-      positionTolerance_(positionTolerance),
-      updateIntervalMicros_(updateIntervalMicros),
-      referencePosition_(0),
-      lastUpdateMicros_(0),
+      positionTolerance_(makeNonNegative(positionTolerance)),
+      legacyUpdateIntervalMicros_(0),
+      legacyLastUpdateMicros_(0),
+      referencePosition_(0.0f),
+      referenceVelocity_(0.0f),
+      currentPosition_(0),
+      trackingError_(0.0f),
       active_(false)
 {
-    if (positionTolerance_ < 0)
-    {
-        positionTolerance_ = 0;
-    }
-
-    // Avoid a zero-length control interval
-    if (updateIntervalMicros_ == 0) {
-        updateIntervalMicros_ = 1;
-    }
 }
 
-void AxisController::begin()
+AxisController::AxisController(
+    Encoder& encoder,
+    PIDController& pidController,
+    MotorDriver& motor,
+    int32_t positionTolerance,
+    unsigned long updateIntervalMicros)
+    : legacyEncoder_(&encoder),
+      pidController_(pidController),
+      motor_(motor),
+      positionTolerance_(makeNonNegative(static_cast<float>(positionTolerance))),
+      legacyUpdateIntervalMicros_(updateIntervalMicros),
+      legacyLastUpdateMicros_(0),
+      referencePosition_(0.0f),
+      referenceVelocity_(0.0f),
+      currentPosition_(0),
+      trackingError_(0.0f),
+      active_(false)
 {
+}
+
+void AxisController::begin() {
     motor_.begin();
-    reset();
-}
-
-void AxisController::startTracking()
-{
     motor_.stop();
     pidController_.reset();
 
-    // Begin from the current encoder position so that starting the controller
-    // does not immediately create an unintended position error.
-    referencePosition_ = static_cast<int32_t>(encoder_.getCount());
+    active_ = false;
+    referenceVelocity_ = 0.0f;
+    legacyLastUpdateMicros_ = 0;
 
-    lastUpdateMicros_ = micros();
+    if (legacyEncoder_ != nullptr) {
+        currentPosition_ = legacyEncoder_->getCount();
+    }
+
+    referencePosition_ = static_cast<float>(currentPosition_);
+
+    trackingError_ = 0.0f;
+}
+
+void AxisController::startTracking(int32_t currentPosition) {
+    motor_.stop();
+    pidController_.reset();
+
+    currentPosition_ = currentPosition;
+
+    // Begin by holding the current motor-space position.
+    // The coordinator can then supply the first trajectory reference.
+    referencePosition_ = static_cast<float>(currentPosition);
+
+    referenceVelocity_ = 0.0f;
+    trackingError_ = 0.0f;
+
     active_ = true;
 }
 
-void AxisController::setReferencePosition(int32_t referencePosition)
-{
+void AxisController::startTracking() {
+    int32_t currentPosition = currentPosition_;
+
+    if (legacyEncoder_ != nullptr) {
+        currentPosition = legacyEncoder_->getCount();
+    }
+
+    startTracking(currentPosition);
+
+    // Timing is retained only for the temporary old update() path.
+    legacyLastUpdateMicros_ = micros();
+}
+
+void AxisController::setReference(float referencePosition, float referenceVelocityCountsPerSecond) {
+    referencePosition_ = referencePosition;
+    referenceVelocity_ = referenceVelocityCountsPerSecond;
+
+    trackingError_ = referencePosition_ - static_cast<float>(currentPosition_);
+}
+
+void AxisController::setReferencePosition( int32_t referencePosition) {
+    setReference( static_cast<float>(referencePosition), 0.0f);
+}
+
+void AxisController::update( int32_t currentPosition, float timeStepSeconds) {
+    currentPosition_ = currentPosition;
+
+    trackingError_ = referencePosition_ - static_cast<float>(currentPosition_);
+
     if (!active_) {
         return;
     }
 
-    // Do not stop motors, reset the PI or restart the update timer here
-    // A trajectroy planner may call this function every control cycle
-    referencePosition_ = referencePosition;
+    // Invalid timing must not change the motor command or
+    // accumulate the PID integral.
+    if (timeStepSeconds <= 0.0f) {
+        return;
+    }
+
+    const float controllerOutput =
+        pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
+
+    motor_.setOutput(convertToMotorCommand(controllerOutput));
 }
 
-void AxisController::update()
-{
-    if (!active_)
-    {
+void AxisController::update() {
+    if (!active_ || legacyEncoder_ == nullptr) {
         return;
     }
 
     const unsigned long currentTimeMicros = micros();
-    const unsigned long elapsedMicros = currentTimeMicros - lastUpdateMicros_;
 
-    if (elapsedMicros < updateIntervalMicros_)
-    {
+    const unsigned long elapsedMicros =
+        currentTimeMicros - legacyLastUpdateMicros_;
+
+    if (elapsedMicros < legacyUpdateIntervalMicros_) {
         return;
     }
 
-    lastUpdateMicros_ = currentTimeMicros;
-
-    // The current Encoder interface returns uint16_t. Convert it to a signed
-    // value before subtracting so reverse errors are calculated correctly.
-    const int32_t currentPosition =
-        static_cast<int32_t>(encoder_.getCount());
-
-    const int32_t trackingError = referencePosition_ - currentPosition;
-
-    if (isErrorWithinTolerance(trackingError))
-    {
-        // The controller remains active as this may only be an intermediate trajectory reference
-        motor_.stop();
+    if (elapsedMicros == 0) {
         return;
     }
+
+    legacyLastUpdateMicros_ = currentTimeMicros;
 
     const float timeStepSeconds =
         static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
 
-    const float controllerOutput =
-        pidController_.update(static_cast<float>(trackingError),
-                              timeStepSeconds);
-
-    motor_.setOutput(static_cast<int16_t>(controllerOutput));
+    update(legacyEncoder_->getCount(), timeStepSeconds);
 }
 
-void AxisController::stop()
-{
+void AxisController::stop() {
     motor_.stop();
     pidController_.reset();
+
+    referenceVelocity_ = 0.0f;
     active_ = false;
 }
 
-void AxisController::reset()
-{
+void AxisController::reset(int32_t currentPosition) {
     stop();
-    referencePosition_ = static_cast<int32_t>(encoder_.getCount());
-    lastUpdateMicros_ = micros();
+
+    currentPosition_ = currentPosition;
+
+    referencePosition_ = static_cast<float>(currentPosition);
+
+    referenceVelocity_ = 0.0f;
+    trackingError_ = 0.0f;
+
+    legacyLastUpdateMicros_ = 0;
 }
 
-bool AxisController::isActive() const
-{
+void AxisController::reset() {
+    int32_t currentPosition = currentPosition_;
+
+    if (legacyEncoder_ != nullptr) {
+        currentPosition = legacyEncoder_->getCount();
+    }
+
+    reset(currentPosition);
+}
+
+bool AxisController::isActive() const {
     return active_;
 }
 
-bool AxisController::isWithinTolerance() const 
-{
-    const int32_t currentPosition = static_cast<int32_t>(encoder_.getCount());
-    const int32_t trackingError = referencePosition_ - currentPosition;
-
-    return isErrorWithinTolerance(trackingError);
+bool AxisController::isWithinTolerance() const {
+    return isErrorWithinTolerance(trackingError_);
 }
 
-AxisTelemetry AxisController::getTelemetry() const
-{
-    const int32_t currentPosition =
-        static_cast<int32_t>(encoder_.getCount());
-
-    const int32_t trackingError = referencePosition_ - currentPosition;
-
-    return {
+AxisTelemetry AxisController::getTelemetry() const {
+    return AxisTelemetry{
         referencePosition_,
-        currentPosition,
-        trackingError,
+        referenceVelocity_,
+        currentPosition_,
+        trackingError_,
         motor_.getOutput(),
         pidController_.getIntegralOutput(),
-        isErrorWithinTolerance(trackingError),
-        active_,
+        isWithinTolerance(),
+        active_
     };
 }
 
-bool AxisController::isErrorWithinTolerance(int32_t error) const
+bool AxisController::isErrorWithinTolerance(float error) const {
+    if (error < 0.0f) {
+        error = -error;
+    }
+
+    return error <= positionTolerance_;
+}
+
+int16_t AxisController::convertToMotorCommand(float controllerOutput) const
 {
-    return  error >= -positionTolerance_ &&
-            error <= positionTolerance_;
+    // Defensive limits before conversion to int16_t.
+    if (controllerOutput >= 32767.0f) {
+        return 32767;
+    }
+
+    if (controllerOutput <= -32768.0f) {
+        return -32768;
+    }
+
+    // Round to the nearest integer PWM command.
+    if (controllerOutput >= 0.0f) {
+        return static_cast<int16_t>(controllerOutput + 0.5f);
+    }
+
+    return static_cast<int16_t>(controllerOutput - 0.5f);
 }

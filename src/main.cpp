@@ -1,630 +1,1230 @@
-/*
- * ME306 combined hardware diagnostic build
- *
- * Purpose
- * -------
- * Temporary, directly flashable diagnostic main for the Arduino Mega2560
- * plotter project. It exercises:
- *   - both encoder channels using the existing pin-change interrupt module;
- *   - all four active-low limit switches using both polling/debounce and
- *     dedicated FALLING external interrupts;
- *   - both MotorDriver instances using short, low-output serial-commanded
- *     pulses;
- *   - the four paired motor-command combinations from the supplied platform
- *     motion table.
- *
- * Safety behaviour
- * ----------------
- * Motors never start automatically. Every motor command times out after a
- * short pulse. Any raw or debounced limit-switch press stops both motors and
- * latches motion off. The latch can only be cleared after all four switches
- * are released.
- *
- * This file is intended to temporarily replace src/main.cpp. It depends on
- * the project's existing PinConfig, SystemConfig, Encoder, LimitSwitch, and
- * MotorDriver files.
- */
-
 #include <Arduino.h>
 #include <avr/interrupt.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "config/PinConfig.h"
 #include "config/SystemConfig.h"
+#include "control/AxisController.h"
+#include "control/Converter.h"
+#include "control/HomingController.h"
+#include "control/PIDController.h"
+#include "control/XYCoordinator.h"
 #include "hardware/Encoder.h"
 #include "hardware/LimitSwitch.h"
 #include "hardware/MotorDriver.h"
+#include "system/PlotterFSM.h"
+#include "system/PlotterSystem.h"
+#include "system/TrajectoryPlanner.h"
 
-namespace DiagnosticConfig
+namespace
 {
-    // Diagnostic-only limits. These do not belong in SystemConfig.
-    constexpr int16_t MOTOR_TEST_PWM = 100;
-    constexpr unsigned long MOTOR_TEST_DURATION_MS = 300UL;
-    constexpr unsigned long TELEMETRY_INTERVAL_MS = 250UL;
-}
+// -----------------------------------------------------------------------------
+// Initial hardware-bring-up settings
+// -----------------------------------------------------------------------------
+// These controller values are placeholders until the physical system is tuned.
+// Homing is open-loop and does not use these PI values.
+constexpr float INITIAL_PROPORTIONAL_GAIN = 1.0f;
+constexpr float INITIAL_INTEGRAL_GAIN = 0.0f;
+constexpr float INITIAL_VELOCITY_FEEDFORWARD_GAIN = 0.0f;
 
-enum LimitIndex : uint8_t
+constexpr float CONTROLLER_MINIMUM_OUTPUT = -80.0f;
+constexpr float CONTROLLER_MAXIMUM_OUTPUT = 80.0f;
+constexpr float CONTROLLER_MINIMUM_INTEGRAL_OUTPUT = -40.0f;
+constexpr float CONTROLLER_MAXIMUM_INTEGRAL_OUTPUT = 40.0f;
+
+// Approximately 0.21 mm with the current 14 mm pulley/count conversion.
+constexpr float INITIAL_POSITION_TOLERANCE_COUNTS = 20.0f;
+
+// This temporary limit clamps every motor command, including the homing coarse
+// PWM of 60, while the switch polarity and A/B directions are first verified.
+// Raise it only after the complete low-power homing sequence is correct.
+constexpr uint8_t BRINGUP_MOTOR_OUTPUT_LIMIT = 80;
+
+constexpr uint8_t MANUAL_TEST_PWM = 20; // change here if the manual test pulse is too strong or too weak
+constexpr unsigned long MANUAL_TEST_DURATION_MS = 150UL;
+
+constexpr size_t COMMAND_BUFFER_SIZE = 20U;
+
+// Conservative closed-loop move-test settings. Test destinations are expressed
+// as fractions of the travel measured by HomingController, so they stay clear
+// of the physical limits even when the final machine dimensions change.
+constexpr float MOVE_TEST_FEEDRATE_MM_PER_MINUTE = 120.0f;
+constexpr float MOVE_TEST_ACCELERATION_MM_PER_SECOND_SQUARED = 10.0f;
+constexpr float MOVE_TEST_POSITION_EPSILON_MM = 0.05f;
+constexpr float MOVE_TEST_MINIMUM_TRAVEL_MM = 5.0f;
+constexpr unsigned long MOVE_TELEMETRY_INTERVAL_MS = 500UL;
+
+struct FractionalTestPoint
 {
-    LIMIT_LEFT = 0,
-    LIMIT_RIGHT,
-    LIMIT_BOTTOM,
-    LIMIT_TOP,
-    LIMIT_COUNT
+    float xFraction;
+    float yFraction;
+    const char* name;
 };
 
-enum LimitMask : uint8_t
-{
-    LIMIT_MASK_LEFT = 1U << LIMIT_LEFT,
-    LIMIT_MASK_RIGHT = 1U << LIMIT_RIGHT,
-    LIMIT_MASK_BOTTOM = 1U << LIMIT_BOTTOM,
-    LIMIT_MASK_TOP = 1U << LIMIT_TOP
-};
+const FractionalTestPoint TEST_POINT_1 = {0.20f, 0.20f, "P1"};
+const FractionalTestPoint TEST_POINT_2 = {0.80f, 0.20f, "P2"};
+const FractionalTestPoint TEST_POINT_3 = {0.80f, 0.80f, "P3"};
+const FractionalTestPoint TEST_POINT_4 = {0.20f, 0.80f, "P4"};
+const FractionalTestPoint TEST_POINT_CENTRE = {0.50f, 0.50f, "CENTER"};
 
-// Existing hardware modules
+// Covers horizontal, vertical, positive diagonal and negative diagonal moves.
+const FractionalTestPoint MOVE_TEST_ROUTE[] = {
+    TEST_POINT_1,
+    TEST_POINT_2,
+    TEST_POINT_3,
+    TEST_POINT_4,
+    TEST_POINT_1,
+    TEST_POINT_3,
+    TEST_POINT_4,
+    TEST_POINT_2,
+    TEST_POINT_CENTRE};
+
+constexpr size_t MOVE_TEST_ROUTE_POINT_COUNT =
+    sizeof(MOVE_TEST_ROUTE) / sizeof(MOVE_TEST_ROUTE[0]);
+
+// -----------------------------------------------------------------------------
+// Hardware and control objects - declared in dependency order
+// -----------------------------------------------------------------------------
 Encoder encoderA(true);
 Encoder encoderB(false);
 
-MotorDriver motor1(
-    PinConfig::MOTOR_1_DIRECTION_PIN,
-    PinConfig::MOTOR_1_PWM_PIN,
-    SystemConfig::MOTOR_1_DIRECTION_INVERTED,
-    SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT);
-
-MotorDriver motor2(
-    PinConfig::MOTOR_2_DIRECTION_PIN,
-    PinConfig::MOTOR_2_PWM_PIN,
-    SystemConfig::MOTOR_2_DIRECTION_INVERTED,
-    SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT);
-
-LimitSwitch leftLimit(
+LimitSwitch leftLimitSwitch(
     PinConfig::LIMIT_SWITCH_LEFT_PIN,
     SystemConfig::LIMIT_SWITCH_INPUT_MODE,
     SystemConfig::LIMIT_SWITCH_DEBOUNCE_MS);
 
-LimitSwitch rightLimit(
+LimitSwitch rightLimitSwitch(
     PinConfig::LIMIT_SWITCH_RIGHT_PIN,
     SystemConfig::LIMIT_SWITCH_INPUT_MODE,
     SystemConfig::LIMIT_SWITCH_DEBOUNCE_MS);
 
-LimitSwitch bottomLimit(
+LimitSwitch bottomLimitSwitch(
     PinConfig::LIMIT_SWITCH_BOTTOM_PIN,
     SystemConfig::LIMIT_SWITCH_INPUT_MODE,
     SystemConfig::LIMIT_SWITCH_DEBOUNCE_MS);
 
-LimitSwitch topLimit(
+LimitSwitch topLimitSwitch(
     PinConfig::LIMIT_SWITCH_TOP_PIN,
     SystemConfig::LIMIT_SWITCH_INPUT_MODE,
     SystemConfig::LIMIT_SWITCH_DEBOUNCE_MS);
 
-LimitSwitch *const limitSwitches[LIMIT_COUNT] =
+MotorDriver motorA(
+    PinConfig::MOTOR_1_DIRECTION_PIN,
+    PinConfig::MOTOR_1_PWM_PIN,
+    SystemConfig::MOTOR_1_DIRECTION_INVERTED,
+    BRINGUP_MOTOR_OUTPUT_LIMIT);
+
+MotorDriver motorB(
+    PinConfig::MOTOR_2_DIRECTION_PIN,
+    PinConfig::MOTOR_2_PWM_PIN,
+    SystemConfig::MOTOR_2_DIRECTION_INVERTED,
+    BRINGUP_MOTOR_OUTPUT_LIMIT);
+
+PIDController pidA(
+    INITIAL_PROPORTIONAL_GAIN,
+    INITIAL_INTEGRAL_GAIN,
+    CONTROLLER_MINIMUM_OUTPUT,
+    CONTROLLER_MAXIMUM_OUTPUT,
+    CONTROLLER_MINIMUM_INTEGRAL_OUTPUT,
+    CONTROLLER_MAXIMUM_INTEGRAL_OUTPUT,
+    INITIAL_VELOCITY_FEEDFORWARD_GAIN);
+
+PIDController pidB(
+    INITIAL_PROPORTIONAL_GAIN,
+    INITIAL_INTEGRAL_GAIN,
+    CONTROLLER_MINIMUM_OUTPUT,
+    CONTROLLER_MAXIMUM_OUTPUT,
+    CONTROLLER_MINIMUM_INTEGRAL_OUTPUT,
+    CONTROLLER_MAXIMUM_INTEGRAL_OUTPUT,
+    INITIAL_VELOCITY_FEEDFORWARD_GAIN);
+
+AxisController axisA(
+    pidA,
+    motorA,
+    INITIAL_POSITION_TOLERANCE_COUNTS);
+
+AxisController axisB(
+    pidB,
+    motorB,
+    INITIAL_POSITION_TOLERANCE_COUNTS);
+
+Converter converter(
+    SystemConfig::MOTOR_A_MM_PER_COUNT,
+    SystemConfig::MOTOR_B_MM_PER_COUNT,
+    SystemConfig::MOTOR_A_COORDINATE_SIGN,
+    SystemConfig::MOTOR_B_COORDINATE_SIGN);
+
+XYCoordinator xyCoordinator(
+    encoderA,
+    encoderB,
+    axisA,
+    axisB,
+    converter,
+    SystemConfig::MOTION_CONTROL_PERIOD_MICROS);
+
+const HomingConfig homingConfig = {
+    SystemConfig::HOMING_COARSE_APPROACH_PWM,
+    SystemConfig::HOMING_BACKOFF_PWM,
+    SystemConfig::HOMING_FINE_APPROACH_PWM,
+    SystemConfig::HOMING_FINAL_RELEASE_PWM,
+    SystemConfig::HOMING_BACKOFF_DISTANCE_MM,
+    SystemConfig::HOMING_CONTACT_PAUSE_MS,
+    SystemConfig::HOMING_FINE_CONTACT_PAUSE_MS,
+    SystemConfig::HOMING_SEARCH_TIMEOUT_MS,
+    SystemConfig::HOMING_BACKOFF_TIMEOUT_MS,
+    SystemConfig::HOMING_FINAL_RELEASE_TIMEOUT_MS,
+    SystemConfig::HOMING_OVERALL_TIMEOUT_MS};
+
+HomingController homingController(
+    encoderA,
+    encoderB,
+    motorA,
+    motorB,
+    converter,
+    leftLimitSwitch,
+    rightLimitSwitch,
+    bottomLimitSwitch,
+    topLimitSwitch,
+    homingConfig);
+
+plotter::TrajectoryPlanner trajectoryPlanner;
+
+plotter::PlotterSystem plotterSystem(
+    axisA,
+    axisB,
+    xyCoordinator,
+    trajectoryPlanner,
+    homingController);
+
+// -----------------------------------------------------------------------------
+// Bring-up console state
+// -----------------------------------------------------------------------------
+char commandBuffer[COMMAND_BUFFER_SIZE] = {};
+size_t commandLength = 0U;
+
+bool systemStarted = false;
+bool manualPulseActive = false;
+unsigned long manualPulseStartMs = 0UL;
+
+bool moveTestRouteActive = false;
+size_t nextMoveTestRoutePoint = 0U;
+bool activeMoveTargetValid = false;
+float activeMoveTargetXMm = 0.0f;
+float activeMoveTargetYMm = 0.0f;
+unsigned long lastMoveTelemetryMs = 0UL;
+
+bool lastLeftPressed = false;
+bool lastRightPressed = false;
+bool lastBottomPressed = false;
+bool lastTopPressed = false;
+
+plotter::PlotterState lastPlotterState = plotter::PlotterState::IDLE;
+HomingStage lastHomingStage = HomingStage::IDLE;
+HomingPhase lastHomingPhase = HomingPhase::IDLE;
+
+// -----------------------------------------------------------------------------
+// Limit-switch external-interrupt callbacks
+// -----------------------------------------------------------------------------
+void onLeftLimitSwitchInterrupt()
 {
-    &leftLimit,
-    &rightLimit,
-    &bottomLimit,
-    &topLimit
-};
-
-const uint8_t limitPins[LIMIT_COUNT] =
-{
-    PinConfig::LIMIT_SWITCH_LEFT_PIN,
-    PinConfig::LIMIT_SWITCH_RIGHT_PIN,
-    PinConfig::LIMIT_SWITCH_BOTTOM_PIN,
-    PinConfig::LIMIT_SWITCH_TOP_PIN
-};
-
-const char *const limitNames[LIMIT_COUNT] =
-{
-    "LEFT",
-    "RIGHT",
-    "BOTTOM",
-    "TOP"
-};
-
-// Written only by the four external-interrupt handlers.
-volatile uint8_t rawLimitInterruptMask = 0U;
-volatile bool limitStopRequested = false;
-
-bool previousPressedState[LIMIT_COUNT] = {false, false, false, false};
-bool limitStopLatched = false;
-bool motorPulseActive = false;
-bool telemetryEnabled = true;
-unsigned long motorPulseStartMs = 0UL;
-unsigned long lastTelemetryMs = 0UL;
-
-struct EncoderSnapshot
-{
-    uint16_t countA;
-    uint16_t countB;
-    bool directionA;
-    bool directionB;
-};
-
-// Encoder A uses D68 / PCINT22 / PCINT2_vect.
-ISR(PCINT2_vect)
-{
-    encoderA.update();
+    leftLimitSwitch.notifyFromISR();
 }
 
-// Encoder B uses D52 / PCINT1 / PCINT0_vect.
-ISR(PCINT0_vect)
+void onRightLimitSwitchInterrupt()
 {
-    encoderB.update();
+    rightLimitSwitch.notifyFromISR();
 }
 
-// Limit-switch ISRs remain minimal. Debounce and reporting stay in loop().
-void leftLimitISR()
+void onBottomLimitSwitchInterrupt()
 {
-    rawLimitInterruptMask |= LIMIT_MASK_LEFT;
-    limitStopRequested = true;
+    bottomLimitSwitch.notifyFromISR();
 }
 
-void rightLimitISR()
+void onTopLimitSwitchInterrupt()
 {
-    rawLimitInterruptMask |= LIMIT_MASK_RIGHT;
-    limitStopRequested = true;
+    topLimitSwitch.notifyFromISR();
 }
 
-void bottomLimitISR()
+// -----------------------------------------------------------------------------
+// Small print helpers - no dynamic String allocation
+// -----------------------------------------------------------------------------
+void printPressedState(bool pressed)
 {
-    rawLimitInterruptMask |= LIMIT_MASK_BOTTOM;
-    limitStopRequested = true;
+    Serial.print(pressed ? F("PRESSED") : F("released"));
 }
 
-void topLimitISR()
+void printPlotterState(plotter::PlotterState state)
 {
-    rawLimitInterruptMask |= LIMIT_MASK_TOP;
-    limitStopRequested = true;
-}
-
-EncoderSnapshot readEncoderSnapshot()
-{
-    EncoderSnapshot snapshot;
-
-    // The current Encoder count is uint16_t on an 8-bit MCU, so protect the
-    // multi-byte read from a simultaneous pin-change ISR.
-    noInterrupts();
-    snapshot.countA = encoderA.getCount();
-    snapshot.countB = encoderB.getCount();
-    snapshot.directionA = encoderA.getDirection();
-    snapshot.directionB = encoderB.getDirection();
-    interrupts();
-
-    return snapshot;
-}
-
-bool anyRawLimitPressed()
-{
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    switch (state)
     {
-        if (digitalRead(limitPins[index]) == HIGH)
-        {
-            return true;
-        }
+        case plotter::PlotterState::IDLE:
+            Serial.print(F("IDLE"));
+            break;
+        case plotter::PlotterState::HOMING:
+            Serial.print(F("HOMING"));
+            break;
+        case plotter::PlotterState::MOVING:
+            Serial.print(F("MOVING"));
+            break;
+        case plotter::PlotterState::FAULT:
+            Serial.print(F("FAULT"));
+            break;
+    }
+}
+
+void printHomingStage(HomingStage stage)
+{
+    switch (stage)
+    {
+        case HomingStage::IDLE:
+            Serial.print(F("IDLE"));
+            break;
+        case HomingStage::X_MAX:
+            Serial.print(F("X_MAX"));
+            break;
+        case HomingStage::X_ORIGIN:
+            Serial.print(F("X_ORIGIN"));
+            break;
+        case HomingStage::Y_MAX:
+            Serial.print(F("Y_MAX"));
+            break;
+        case HomingStage::Y_ORIGIN:
+            Serial.print(F("Y_ORIGIN"));
+            break;
+        case HomingStage::COMPLETE:
+            Serial.print(F("COMPLETE"));
+            break;
+        case HomingStage::ABORTED:
+            Serial.print(F("ABORTED"));
+            break;
+    }
+}
+
+void printHomingPhase(HomingPhase phase)
+{
+    switch (phase)
+    {
+        case HomingPhase::IDLE:
+            Serial.print(F("IDLE"));
+            break;
+        case HomingPhase::COARSE_APPROACH:
+            Serial.print(F("COARSE_APPROACH"));
+            break;
+        case HomingPhase::CONTACT_PAUSE:
+            Serial.print(F("CONTACT_PAUSE"));
+            break;
+        case HomingPhase::BACKOFF:
+            Serial.print(F("BACKOFF"));
+            break;
+        case HomingPhase::FINE_APPROACH:
+            Serial.print(F("FINE_APPROACH"));
+            break;
+        case HomingPhase::FINE_CONTACT_PAUSE:
+            Serial.print(F("FINE_CONTACT_PAUSE"));
+            break;
+        case HomingPhase::FINAL_RELEASE:
+            Serial.print(F("FINAL_RELEASE"));
+            break;
+        case HomingPhase::RECORD_POSITION:
+            Serial.print(F("RECORD_POSITION"));
+            break;
+        case HomingPhase::COMPLETE:
+            Serial.print(F("COMPLETE"));
+            break;
+        case HomingPhase::ABORTED:
+            Serial.print(F("ABORTED"));
+            break;
+    }
+}
+
+void printFaultCode(plotter::FaultCode fault)
+{
+    switch (fault)
+    {
+        case plotter::FaultCode::NONE:
+            Serial.print(F("NONE"));
+            break;
+        case plotter::FaultCode::UNEXPECTED_LIMIT:
+            Serial.print(F("UNEXPECTED_LIMIT"));
+            break;
+        case plotter::FaultCode::WRONG_HOMING_LIMIT:
+            Serial.print(F("WRONG_HOMING_LIMIT"));
+            break;
+        case plotter::FaultCode::CONTRADICTORY_LIMITS:
+            Serial.print(F("CONTRADICTORY_LIMITS"));
+            break;
+        case plotter::FaultCode::HOMING_TIMEOUT:
+            Serial.print(F("HOMING_TIMEOUT"));
+            break;
+        case plotter::FaultCode::MOVE_TIMEOUT:
+            Serial.print(F("MOVE_TIMEOUT"));
+            break;
+        case plotter::FaultCode::ENCODER_NO_MOTION:
+            Serial.print(F("ENCODER_NO_MOTION"));
+            break;
+        case plotter::FaultCode::POSITION_OUT_OF_RANGE:
+            Serial.print(F("POSITION_OUT_OF_RANGE"));
+            break;
+        case plotter::FaultCode::INTERNAL_ERROR:
+            Serial.print(F("INTERNAL_ERROR"));
+            break;
+    }
+}
+
+void printRejectReason(plotter::RejectReason reason)
+{
+    switch (reason)
+    {
+        case plotter::RejectReason::NONE:
+            Serial.print(F("NONE"));
+            break;
+        case plotter::RejectReason::BUSY:
+            Serial.print(F("BUSY"));
+            break;
+        case plotter::RejectReason::MACHINE_ZERO_UNKNOWN:
+            Serial.print(F("MACHINE_ZERO_UNKNOWN"));
+            break;
+        case plotter::RejectReason::FAULT_ACTIVE:
+            Serial.print(F("FAULT_ACTIVE"));
+            break;
+        case plotter::RejectReason::UNEXPECTED_EVENT:
+            Serial.print(F("UNEXPECTED_EVENT"));
+            break;
+        case plotter::RejectReason::INVALID_MOTION_PARAMETERS:
+            Serial.print(F("INVALID_MOTION_PARAMETERS"));
+            break;
+    }
+}
+
+void printEncoderCounts()
+{
+    const Encoder::CountPair counts =
+        Encoder::getCountPair(encoderA, encoderB);
+
+    Serial.print(F("A="));
+    Serial.print(counts.countA);
+    Serial.print(F(" B="));
+    Serial.print(counts.countB);
+}
+
+void printSwitchStates()
+{
+    Serial.print(F("LEFT="));
+    printPressedState(leftLimitSwitch.isPressed());
+    Serial.print(F(" RIGHT="));
+    printPressedState(rightLimitSwitch.isPressed());
+    Serial.print(F(" BOTTOM="));
+    printPressedState(bottomLimitSwitch.isPressed());
+    Serial.print(F(" TOP="));
+    printPressedState(topLimitSwitch.isPressed());
+}
+
+void printStatus()
+{
+    Serial.print(F("STATUS state="));
+
+    if (systemStarted)
+    {
+        printPlotterState(plotterSystem.state());
+    }
+    else
+    {
+        Serial.print(F("BRINGUP"));
     }
 
-    return false;
+    Serial.print(F(" | "));
+    printSwitchStates();
+    Serial.print(F(" | "));
+    printEncoderCounts();
+    Serial.print(F(" | motorA="));
+    Serial.print(motorA.getOutput());
+    Serial.print(F(" motorB="));
+    Serial.println(motorB.getOutput());
 }
 
-bool anyDebouncedLimitPressed()
+void printHelp()
 {
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    Serial.println(F("Commands (send with CR or LF):"));
+    Serial.println(F("  STATUS  - switches, encoders, motors and FSM"));
+    Serial.println(F("  A+ A-   - 150 ms low-PWM Motor A pulse"));
+    Serial.println(F("  B+ B-   - 150 ms low-PWM Motor B pulse"));
+    Serial.println(F("  X+ X-   - 150 ms Cartesian X pulse"));
+    Serial.println(F("  Y+ Y-   - 150 ms Cartesian Y pulse"));
+    Serial.println(F("  HOME/G28- initialise the system and start homing"));
+    Serial.println(F("  P1..P4  - move to an interior test point"));
+    Serial.println(F("  CENTER  - move to the measured travel centre"));
+    Serial.println(F("  ROUTE   - run horizontal, vertical and diagonal lines"));
+    Serial.println(F("  STOP    - stop and enter FAULT if system is active"));
+    Serial.println(F("  RESET   - clear fault after all limits are released"));
+    Serial.println(F("Manual pulses are disabled after the first HOME."));
+    Serial.println(F("Move tests require successful homing and released limits."));
+}
+
+// -----------------------------------------------------------------------------
+// Switch and manual-pulse handling
+// -----------------------------------------------------------------------------
+void updateAllLimitSwitches()
+{
+    leftLimitSwitch.update();
+    rightLimitSwitch.update();
+    bottomLimitSwitch.update();
+    topLimitSwitch.update();
+}
+
+bool anyLimitSwitchPressed()
+{
+    return leftLimitSwitch.isPressed() ||
+           rightLimitSwitch.isPressed() ||
+           bottomLimitSwitch.isPressed() ||
+           topLimitSwitch.isPressed();
+}
+
+bool contradictoryLimitSwitchesPressed()
+{
+    return (leftLimitSwitch.isPressed() && rightLimitSwitch.isPressed()) ||
+           (bottomLimitSwitch.isPressed() && topLimitSwitch.isPressed());
+}
+
+void stopManualPulse()
+{
+    motorA.stop();
+    motorB.stop();
+    manualPulseActive = false;
+}
+
+void startManualPulse(int16_t motorACommand, int16_t motorBCommand)
+{
+    if (systemStarted)
     {
-        if (limitSwitches[index]->isPressed())
-        {
-            return true;
-        }
+        Serial.println(F("REJECTED: manual pulses require a board reset."));
+        return;
     }
 
-    return false;
+    if (anyLimitSwitchPressed())
+    {
+        Serial.println(F("REJECTED: release all limit switches first."));
+        return;
+    }
+
+    stopManualPulse();
+    motorA.setOutput(motorACommand);
+    motorB.setOutput(motorBCommand);
+    manualPulseStartMs = millis();
+    manualPulseActive = true;
+
+    Serial.print(F("PULSE motorA="));
+    Serial.print(motorA.getOutput());
+    Serial.print(F(" motorB="));
+    Serial.println(motorB.getOutput());
 }
 
-bool allLimitsReleased()
+int16_t commandForVelocitySign(float velocity)
 {
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    if (velocity > 0.0f)
     {
-        if ((digitalRead(limitPins[index]) == HIGH) ||
-            limitSwitches[index]->isPressed())
-        {
-            return false;
-        }
+        return static_cast<int16_t>(MANUAL_TEST_PWM);
+    }
+
+    if (velocity < 0.0f)
+    {
+        return -static_cast<int16_t>(MANUAL_TEST_PWM);
+    }
+
+    return 0;
+}
+
+void startCartesianPulse(int8_t xDirection, int8_t yDirection)
+{
+    const Converter::MotorReference reference =
+        converter.cartesianToMotorReference(
+            0.0f,
+            0.0f,
+            static_cast<float>(xDirection),
+            static_cast<float>(yDirection));
+
+    startManualPulse(
+        commandForVelocitySign(reference.aVelocityCountsPerSecond),
+        commandForVelocitySign(reference.bVelocityCountsPerSecond));
+}
+
+void updateManualPulse()
+{
+    if (!manualPulseActive)
+    {
+        return;
+    }
+
+    if (anyLimitSwitchPressed())
+    {
+        stopManualPulse();
+        Serial.println(F("PULSE STOPPED: a limit switch became active."));
+        printStatus();
+        return;
+    }
+
+    if ((millis() - manualPulseStartMs) >= MANUAL_TEST_DURATION_MS)
+    {
+        stopManualPulse();
+        Serial.print(F("PULSE COMPLETE: "));
+        printEncoderCounts();
+        Serial.println();
+    }
+}
+
+void reportSwitchChange(
+    const __FlashStringHelper* name,
+    bool currentPressed,
+    bool& previousPressed)
+{
+    if (currentPressed == previousPressed)
+    {
+        return;
+    }
+
+    previousPressed = currentPressed;
+    Serial.print(F("SWITCH "));
+    Serial.print(name);
+    Serial.print(F(" -> "));
+    printPressedState(currentPressed);
+    Serial.println();
+}
+
+void monitorSwitchChanges()
+{
+    reportSwitchChange(F("LEFT"), leftLimitSwitch.isPressed(), lastLeftPressed);
+    reportSwitchChange(F("RIGHT"), rightLimitSwitch.isPressed(), lastRightPressed);
+    reportSwitchChange(F("BOTTOM"), bottomLimitSwitch.isPressed(), lastBottomPressed);
+    reportSwitchChange(F("TOP"), topLimitSwitch.isPressed(), lastTopPressed);
+}
+
+// -----------------------------------------------------------------------------
+// Closed-loop Cartesian move tests
+// -----------------------------------------------------------------------------
+enum class MoveTestRequestResult : uint8_t
+{
+    STARTED,
+    ALREADY_AT_TARGET,
+    REJECTED
+};
+
+float absoluteValue(float value)
+{
+    return value < 0.0f ? -value : value;
+}
+
+Converter::CartesianDisplacement currentCartesianPosition()
+{
+    const Encoder::CountPair counts =
+        Encoder::getCountPair(encoderA, encoderB);
+
+    return converter.motorToCartesianDisplacement(
+        static_cast<float>(counts.countA),
+        static_cast<float>(counts.countB));
+}
+
+bool moveTestIsReady()
+{
+    if (!systemStarted)
+    {
+        Serial.println(F("REJECTED: run HOME first."));
+        return false;
+    }
+
+    if (plotterSystem.state() != plotter::PlotterState::IDLE)
+    {
+        Serial.println(F("REJECTED: system is not IDLE."));
+        return false;
+    }
+
+    if (!plotterSystem.machineZeroKnown())
+    {
+        Serial.println(F("REJECTED: machine zero is unknown; run HOME."));
+        return false;
+    }
+
+    if (anyLimitSwitchPressed())
+    {
+        Serial.println(F("REJECTED: release all limit switches first."));
+        return false;
+    }
+
+    const HomingResult homingResult = homingController.result();
+
+    if (!homingResult.xValid || !homingResult.yValid ||
+        homingResult.xTravelMm < MOVE_TEST_MINIMUM_TRAVEL_MM ||
+        homingResult.yTravelMm < MOVE_TEST_MINIMUM_TRAVEL_MM)
+    {
+        Serial.println(F("REJECTED: measured X/Y travel is invalid."));
+        return false;
     }
 
     return true;
 }
 
-void stopAllMotors()
+MoveTestRequestResult requestMoveToTestPoint(
+    const FractionalTestPoint& point)
 {
-    motor1.stop();
-    motor2.stop();
-    motorPulseActive = false;
-}
-
-void printHelp()
-{
-    Serial.println();
-    Serial.println(F("=== ME306 hardware diagnostic commands ==="));
-    Serial.println(F("h or ? : show this command list"));
-    Serial.println(F("p      : print one complete hardware snapshot"));
-    Serial.println(F("t      : toggle continuous telemetry"));
-    Serial.println(F("z      : atomically zero both encoder counts"));
-    Serial.println(F("x      : immediately stop both motors"));
-    Serial.println(F("c      : clear limit-stop latch (all switches must be released)"));
-    Serial.println();
-    Serial.println(F("Short single-motor pulses:"));
-    Serial.println(F("1      : Motor 1, +100 command for 300 ms"));
-    Serial.println(F("2      : Motor 1, -100 command for 300 ms"));
-    Serial.println(F("3      : Motor 2, +100 command for 300 ms"));
-    Serial.println(F("4      : Motor 2, -100 command for 300 ms"));
-    Serial.println();
-    Serial.println(F("Short paired pulses from the supplied motion table:"));
-    Serial.println(F("R      : M1 +100, M2 +100 (candidate pen-right mapping)"));
-    Serial.println(F("L      : M1 -100, M2 -100 (candidate pen-left mapping)"));
-    Serial.println(F("U      : M1 -100, M2 +100 (candidate pen-up mapping)"));
-    Serial.println(F("D      : M1 +100, M2 -100 (candidate pen-down mapping)"));
-    Serial.println();
-    Serial.println(F("Verify the single-motor direction and encoder sign before"));
-    Serial.println(F("treating R/L/U/D labels as confirmed physical directions."));
-    Serial.println(F("Current Encoder count is uint16_t: reverse movement from zero"));
-    Serial.println(F("can appear as 65535, 65534, ... until the signed-count fix."));
-    Serial.println();
-}
-
-void printLimitBits(bool raw)
-{
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    if (!moveTestIsReady())
     {
-        const bool pressed = raw
-            ? (digitalRead(limitPins[index]) == HIGH)
-            : limitSwitches[index]->isPressed();
-
-        Serial.print(pressed ? '1' : '0');
+        return MoveTestRequestResult::REJECTED;
     }
-}
 
-void printSnapshot()
-{
-    const EncoderSnapshot encoder = readEncoderSnapshot();
+    const HomingResult homingResult = homingController.result();
+    const Converter::CartesianDisplacement current =
+        currentCartesianPosition();
 
-    Serial.print(F("t="));
-    Serial.print(millis());
+    const float targetXMm = homingResult.xTravelMm * point.xFraction;
+    const float targetYMm = homingResult.yTravelMm * point.yFraction;
+    const float deltaXMm = targetXMm - current.xMm;
+    const float deltaYMm = targetYMm - current.yMm;
 
-    Serial.print(F("  ENC_A="));
-    Serial.print(encoder.countA);
-    Serial.print(encoder.directionA ? F("(CW)") : F("(CCW)"));
-
-    Serial.print(F("  ENC_B="));
-    Serial.print(encoder.countB);
-    Serial.print(encoder.directionB ? F("(CW)") : F("(CCW)"));
-
-    // Bit order is always Left, Right, Bottom, Top.
-    Serial.print(F("  SW_RAW[LRBT]="));
-    printLimitBits(true);
-
-    Serial.print(F("  SW_DEB[LRBT]="));
-    printLimitBits(false);
-
-    Serial.print(F("  M1="));
-    Serial.print(motor1.getOutput());
-    Serial.print(F("  M2="));
-    Serial.print(motor2.getOutput());
-
-    Serial.print(F("  LIMIT_LATCH="));
-    Serial.println(limitStopLatched ? F("ON") : F("OFF"));
-}
-
-void reportRawLimitInterrupts(uint8_t mask)
-{
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    if (absoluteValue(deltaXMm) <= MOVE_TEST_POSITION_EPSILON_MM &&
+        absoluteValue(deltaYMm) <= MOVE_TEST_POSITION_EPSILON_MM)
     {
-        if ((mask & (1U << index)) != 0U)
+        Serial.print(F("MOVE "));
+        Serial.print(point.name);
+        Serial.println(F(" skipped: already at target."));
+        return MoveTestRequestResult::ALREADY_AT_TARGET;
+    }
+
+    const plotter::FSMResult request =
+        plotterSystem.requestMove(
+            deltaXMm,
+            deltaYMm,
+            MOVE_TEST_FEEDRATE_MM_PER_MINUTE,
+            MOVE_TEST_ACCELERATION_MM_PER_SECOND_SQUARED);
+
+    if (!request.accepted)
+    {
+        Serial.print(F("MOVE "));
+        Serial.print(point.name);
+        Serial.print(F(" rejected: "));
+        printRejectReason(request.rejectReason);
+        Serial.println();
+        return MoveTestRequestResult::REJECTED;
+    }
+
+    activeMoveTargetXMm = targetXMm;
+    activeMoveTargetYMm = targetYMm;
+    activeMoveTargetValid = true;
+    lastMoveTelemetryMs = millis();
+
+    Serial.print(F("MOVE "));
+    Serial.print(point.name);
+    Serial.print(F(" accepted: current=("));
+    Serial.print(current.xMm, 2);
+    Serial.print(F(", "));
+    Serial.print(current.yMm, 2);
+    Serial.print(F(") target=("));
+    Serial.print(targetXMm, 2);
+    Serial.print(F(", "));
+    Serial.print(targetYMm, 2);
+    Serial.print(F(") delta=("));
+    Serial.print(deltaXMm, 2);
+    Serial.print(F(", "));
+    Serial.print(deltaYMm, 2);
+    Serial.println(F(") mm"));
+
+    return MoveTestRequestResult::STARTED;
+}
+
+void requestNextRoutePoint()
+{
+    while (moveTestRouteActive &&
+           nextMoveTestRoutePoint < MOVE_TEST_ROUTE_POINT_COUNT)
+    {
+        const FractionalTestPoint& point =
+            MOVE_TEST_ROUTE[nextMoveTestRoutePoint];
+
+        ++nextMoveTestRoutePoint;
+
+        const MoveTestRequestResult result =
+            requestMoveToTestPoint(point);
+
+        if (result == MoveTestRequestResult::STARTED)
         {
-            Serial.print(F("[LIMIT INT] "));
-            Serial.print(limitNames[index]);
-            Serial.println(F(" raw FALLING edge"));
+            return;
+        }
+
+        if (result == MoveTestRequestResult::REJECTED)
+        {
+            moveTestRouteActive = false;
+            Serial.println(F("ROUTE cancelled."));
+            return;
         }
     }
+
+    if (moveTestRouteActive)
+    {
+        moveTestRouteActive = false;
+        Serial.println(F("ROUTE COMPLETE."));
+    }
 }
 
-void serviceRawLimitInterrupts()
+void startSingleMoveTest(const FractionalTestPoint& point)
 {
-    uint8_t pendingMask;
-    bool stopRequested;
+    moveTestRouteActive = false;
+    nextMoveTestRoutePoint = 0U;
+    requestMoveToTestPoint(point);
+}
 
-    noInterrupts();
-    pendingMask = rawLimitInterruptMask;
-    rawLimitInterruptMask = 0U;
-    stopRequested = limitStopRequested;
-    limitStopRequested = false;
-    interrupts();
-
-    if (!stopRequested && (pendingMask == 0U))
+void startMoveTestRoute()
+{
+    if (!moveTestIsReady())
     {
         return;
     }
 
-    stopAllMotors();
-    limitStopLatched = true;
-    Serial.println(F("[SAFETY] Raw limit interrupt: both motors stopped; latch ON."));
-    reportRawLimitInterrupts(pendingMask);
+    moveTestRouteActive = true;
+    nextMoveTestRoutePoint = 0U;
+    Serial.println(F("ROUTE started; STOP/M112 cancels and enters FAULT."));
+    requestNextRoutePoint();
 }
 
-void updateAndReportLimitSwitches()
+void monitorMoveTelemetry()
 {
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
+    if (!systemStarted ||
+        plotterSystem.state() != plotter::PlotterState::MOVING ||
+        !activeMoveTargetValid)
     {
-        limitSwitches[index]->update();
-        const bool pressed = limitSwitches[index]->isPressed();
+        return;
+    }
 
-        if (pressed != previousPressedState[index])
+    const unsigned long currentTimeMs = millis();
+
+    if ((currentTimeMs - lastMoveTelemetryMs) <
+        MOVE_TELEMETRY_INTERVAL_MS)
+    {
+        return;
+    }
+
+    lastMoveTelemetryMs = currentTimeMs;
+
+    const Converter::CartesianDisplacement current =
+        currentCartesianPosition();
+    const XYCoordinatorTelemetry telemetry =
+        xyCoordinator.getTelemetry();
+
+    Serial.print(F("MOVE x="));
+    Serial.print(current.xMm, 2);
+    Serial.print(F("/"));
+    Serial.print(activeMoveTargetXMm, 2);
+    Serial.print(F(" y="));
+    Serial.print(current.yMm, 2);
+    Serial.print(F("/"));
+    Serial.print(activeMoveTargetYMm, 2);
+    Serial.print(F(" | errA="));
+    Serial.print(telemetry.motorA.trackingError, 1);
+    Serial.print(F(" errB="));
+    Serial.print(telemetry.motorB.trackingError, 1);
+    Serial.print(F(" outA="));
+    Serial.print(telemetry.motorA.motorOutput);
+    Serial.print(F(" outB="));
+    Serial.println(telemetry.motorB.motorOutput);
+}
+
+// -----------------------------------------------------------------------------
+// System monitoring and command handling
+// -----------------------------------------------------------------------------
+void printHomingResult()
+{
+    const HomingResult result = homingController.result();
+
+    Serial.print(F("HOMING RESULT xTravelMm="));
+    Serial.print(result.xTravelMm, 3);
+    Serial.print(F(" yTravelMm="));
+    Serial.print(result.yTravelMm, 3);
+    Serial.print(F(" xValid="));
+    Serial.print(result.xValid ? F("yes") : F("no"));
+    Serial.print(F(" yValid="));
+    Serial.println(result.yValid ? F("yes") : F("no"));
+}
+
+void monitorSystemChanges()
+{
+    if (!systemStarted)
+    {
+        return;
+    }
+
+    const plotter::PlotterState currentState = plotterSystem.state();
+
+    if (currentState != lastPlotterState)
+    {
+        const plotter::PlotterState previousState = lastPlotterState;
+        lastPlotterState = currentState;
+        Serial.print(F("FSM -> "));
+        printPlotterState(currentState);
+
+        if (currentState == plotter::PlotterState::FAULT)
         {
-            previousPressedState[index] = pressed;
+            moveTestRouteActive = false;
+            activeMoveTargetValid = false;
 
-            Serial.print(F("[SWITCH] "));
-            Serial.print(limitNames[index]);
-            Serial.println(pressed ? F(" debounced PRESSED") : F(" debounced RELEASED"));
+            Serial.print(F(" code="));
+            printFaultCode(plotterSystem.activeFault());
+        }
 
-            if (pressed)
+        Serial.println();
+
+        if (currentState == plotter::PlotterState::IDLE &&
+            previousState == plotter::PlotterState::HOMING &&
+            plotterSystem.machineZeroKnown())
+        {
+            moveTestRouteActive = false;
+            activeMoveTargetValid = false;
+            printHomingResult();
+        }
+
+        if (currentState == plotter::PlotterState::IDLE &&
+            previousState == plotter::PlotterState::MOVING)
+        {
+            const Converter::CartesianDisplacement current =
+                currentCartesianPosition();
+
+            Serial.print(F("MOVE COMPLETE: actual=("));
+            Serial.print(current.xMm, 2);
+            Serial.print(F(", "));
+            Serial.print(current.yMm, 2);
+            Serial.println(F(") mm"));
+
+            activeMoveTargetValid = false;
+
+            if (moveTestRouteActive)
             {
-                stopAllMotors();
-                limitStopLatched = true;
-                Serial.println(F("[SAFETY] Debounced limit press: both motors stopped; latch ON."));
+                requestNextRoutePoint();
             }
         }
     }
+
+    const HomingStage currentStage = homingController.stage();
+    const HomingPhase currentPhase = homingController.phase();
+
+    if (currentStage != lastHomingStage ||
+        currentPhase != lastHomingPhase)
+    {
+        lastHomingStage = currentStage;
+        lastHomingPhase = currentPhase;
+
+        Serial.print(F("HOMING stage="));
+        printHomingStage(currentStage);
+        Serial.print(F(" phase="));
+        printHomingPhase(currentPhase);
+        Serial.print(F(" | "));
+        printEncoderCounts();
+        Serial.println();
+    }
 }
 
-void startMotorPulse(int16_t motor1Command,
-                     int16_t motor2Command,
-                     const __FlashStringHelper *label)
+void startOrRequestHoming()
 {
-    // Check both raw and debounced inputs so a just-pressed switch cannot be
-    // bypassed during its debounce interval.
-    if (limitStopLatched || anyRawLimitPressed() || anyDebouncedLimitPressed())
+    stopManualPulse();
+    moveTestRouteActive = false;
+    activeMoveTargetValid = false;
+
+    if (contradictoryLimitSwitchesPressed())
     {
-        stopAllMotors();
-        limitStopLatched = true;
-        Serial.print(F("[BLOCKED] "));
-        Serial.print(label);
-        Serial.println(F(": release all switches, then send c."));
+        Serial.println(F("REJECTED: contradictory X or Y limit inputs."));
         return;
     }
 
-    stopAllMotors();
-    motor1.setOutput(motor1Command);
-    motor2.setOutput(motor2Command);
-    motorPulseStartMs = millis();
-    motorPulseActive = true;
-
-    Serial.print(F("[MOTOR] "));
-    Serial.print(label);
-    Serial.print(F(" started: M1="));
-    Serial.print(motor1.getOutput());
-    Serial.print(F(", M2="));
-    Serial.print(motor2.getOutput());
-    Serial.println(F(", automatic stop in 300 ms."));
-}
-
-void serviceMotorPulseTimeout()
-{
-    if (motorPulseActive &&
-        ((millis() - motorPulseStartMs) >= DiagnosticConfig::MOTOR_TEST_DURATION_MS))
+    if (!systemStarted)
     {
-        stopAllMotors();
-        Serial.println(F("[MOTOR] Pulse complete; both motors stopped."));
-    }
-}
+        // PlotterSystem::begin() initialises XYCoordinator, both axes,
+        // HomingController and the FSM, then starts the configured startup
+        // homing sequence. Limit-switch begin()/ISR wiring has already run.
+        plotterSystem.begin();
+        systemStarted = true;
 
-void zeroBothEncoders()
-{
-    noInterrupts();
-    encoderA.zeroCount();
-    encoderB.zeroCount();
-    interrupts();
+        lastPlotterState = plotter::PlotterState::IDLE;
+        lastHomingStage = HomingStage::IDLE;
+        lastHomingPhase = HomingPhase::IDLE;
 
-    Serial.println(F("[ENCODER] Both counts zeroed."));
-}
-
-void clearLimitLatch()
-{
-    if (!allLimitsReleased())
-    {
-        Serial.println(F("[BLOCKED] At least one limit input is still active."));
+        Serial.println(F("System initialised; startup homing requested."));
+        monitorSystemChanges();
         return;
     }
 
-    limitStopLatched = false;
-    Serial.println(F("[SAFETY] All switches released; limit latch cleared."));
+    const plotter::FSMResult result = plotterSystem.requestHoming();
+
+    Serial.println(
+        result.accepted
+            ? F("Homing request accepted.")
+            : F("Homing request rejected by FSM."));
 }
 
-void handleSerialCommand(char command)
+void emergencyStop()
 {
-    switch (command)
+    stopManualPulse();
+    moveTestRouteActive = false;
+    activeMoveTargetValid = false;
+
+    if (!systemStarted)
     {
-        case '\r':
-        case '\n':
-        case ' ':
-        case '\t':
-            break;
-
-        case 'h':
-        case 'H':
-        case '?':
-            printHelp();
-            break;
-
-        case 'p':
-        case 'P':
-            printSnapshot();
-            break;
-
-        case 't':
-        case 'T':
-            telemetryEnabled = !telemetryEnabled;
-            Serial.print(F("[TELEMETRY] "));
-            Serial.println(telemetryEnabled ? F("ON") : F("OFF"));
-            break;
-
-        case 'z':
-        case 'Z':
-            zeroBothEncoders();
-            break;
-
-        case 'x':
-        case 'X':
-            stopAllMotors();
-            Serial.println(F("[MOTOR] Manual stop; both motors are at zero."));
-            break;
-
-        case 'c':
-        case 'C':
-            clearLimitLatch();
-            break;
-
-        case '1':
-            startMotorPulse(
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                0,
-                F("Motor 1 positive"));
-            break;
-
-        case '2':
-            startMotorPulse(
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                0,
-                F("Motor 1 negative"));
-            break;
-
-        case '3':
-            startMotorPulse(
-                0,
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                F("Motor 2 positive"));
-            break;
-
-        case '4':
-            startMotorPulse(
-                0,
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                F("Motor 2 negative"));
-            break;
-
-        // Upper-case paired commands avoid colliding with the lower-case
-        // help/telemetry/control commands.
-        case 'R':
-            startMotorPulse(
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                F("candidate RIGHT (+,+)"));
-            break;
-
-        case 'L':
-            startMotorPulse(
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                F("candidate LEFT (-,-)"));
-            break;
-
-        case 'U':
-            startMotorPulse(
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                F("candidate UP (-,+)"));
-            break;
-
-        case 'D':
-            startMotorPulse(
-                DiagnosticConfig::MOTOR_TEST_PWM,
-                -DiagnosticConfig::MOTOR_TEST_PWM,
-                F("candidate DOWN (+,-)"));
-            break;
-
-        default:
-            Serial.print(F("[UNKNOWN] Command '"));
-            Serial.print(command);
-            Serial.println(F("'. Send h for help."));
-            break;
-    }
-}
-
-void attachLimitInterrupt(uint8_t pin, void (*handler)(), const char *name)
-{
-    const int interruptNumber = digitalPinToInterrupt(pin);
-
-    if (interruptNumber == NOT_AN_INTERRUPT)
-    {
-        Serial.print(F("[ERROR] "));
-        Serial.print(name);
-        Serial.print(F(" pin D"));
-        Serial.print(pin);
-        Serial.println(F(" is not external-interrupt capable."));
-        limitStopLatched = true;
+        Serial.println(F("Stopped."));
         return;
     }
 
-    attachInterrupt(interruptNumber, handler, RISING);
+    if (plotterSystem.state() == plotter::PlotterState::HOMING ||
+        plotterSystem.state() == plotter::PlotterState::MOVING)
+    {
+        plotterSystem.reportFault(plotter::FaultCode::INTERNAL_ERROR);
+        Serial.println(F("STOP accepted; system entered FAULT."));
+    }
+    else
+    {
+        Serial.println(F("System already stopped."));
+    }
+}
+
+void resetSystemFault()
+{
+    if (!systemStarted)
+    {
+        Serial.println(F("REJECTED: system has not been started."));
+        return;
+    }
+
+    // The FSM deliberately preserves a valid machine zero across a normal
+    // move fault.  Limit inputs must nevertheless be released before the
+    // external reset policy allows the FAULT latch to be cleared.
+    if (anyLimitSwitchPressed())
+    {
+        Serial.println(F("REJECTED: release all limit switches before RESET."));
+        return;
+    }
+
+    const plotter::FSMResult result = plotterSystem.resetFault();
+
+    if (!result.accepted)
+    {
+        Serial.println(F("Fault reset rejected by FSM."));
+        return;
+    }
+
+    if (plotterSystem.machineZeroKnown())
+    {
+        Serial.println(
+            F("Fault reset accepted. Machine zero retained; move commands are available."));
+    }
+    else
+    {
+        Serial.println(
+            F("Fault reset accepted. Machine zero unknown; run HOME before move."));
+    }
+}
+
+void executeCommand(const char* command)
+{
+    if (strcmp(command, "HELP") == 0 || strcmp(command, "?") == 0)
+    {
+        printHelp();
+    }
+    else if (strcmp(command, "STATUS") == 0)
+    {
+        printStatus();
+    }
+    else if (strcmp(command, "A+") == 0)
+    {
+        startManualPulse(MANUAL_TEST_PWM, 0);
+    }
+    else if (strcmp(command, "A-") == 0)
+    {
+        startManualPulse(-static_cast<int16_t>(MANUAL_TEST_PWM), 0);
+    }
+    else if (strcmp(command, "B+") == 0)
+    {
+        startManualPulse(0, MANUAL_TEST_PWM);
+    }
+    else if (strcmp(command, "B-") == 0)
+    {
+        startManualPulse(0, -static_cast<int16_t>(MANUAL_TEST_PWM));
+    }
+    else if (strcmp(command, "X+") == 0)
+    {
+        startCartesianPulse(1, 0);
+    }
+    else if (strcmp(command, "X-") == 0)
+    {
+        startCartesianPulse(-1, 0);
+    }
+    else if (strcmp(command, "Y+") == 0)
+    {
+        startCartesianPulse(0, 1);
+    }
+    else if (strcmp(command, "Y-") == 0)
+    {
+        startCartesianPulse(0, -1);
+    }
+    else if (strcmp(command, "HOME") == 0 || strcmp(command, "G28") == 0)
+    {
+        startOrRequestHoming();
+    }
+    else if (strcmp(command, "P1") == 0)
+    {
+        startSingleMoveTest(TEST_POINT_1);
+    }
+    else if (strcmp(command, "P2") == 0)
+    {
+        startSingleMoveTest(TEST_POINT_2);
+    }
+    else if (strcmp(command, "P3") == 0)
+    {
+        startSingleMoveTest(TEST_POINT_3);
+    }
+    else if (strcmp(command, "P4") == 0)
+    {
+        startSingleMoveTest(TEST_POINT_4);
+    }
+    else if (strcmp(command, "CENTER") == 0 ||
+             strcmp(command, "CENTRE") == 0)
+    {
+        startSingleMoveTest(TEST_POINT_CENTRE);
+    }
+    else if (strcmp(command, "ROUTE") == 0)
+    {
+        startMoveTestRoute();
+    }
+    else if (strcmp(command, "STOP") == 0 || strcmp(command, "M112") == 0)
+    {
+        emergencyStop();
+    }
+    else if (strcmp(command, "RESET") == 0 || strcmp(command, "M999") == 0)
+    {
+        resetSystemFault();
+    }
+    else
+    {
+        Serial.print(F("Unknown command: "));
+        Serial.println(command);
+    }
+}
+
+char toUpperAscii(char value)
+{
+    if (value >= 'a' && value <= 'z')
+    {
+        return static_cast<char>(value - 'a' + 'A');
+    }
+
+    return value;
+}
+
+void pollSerialCommands()
+{
+    while (Serial.available() > 0)
+    {
+        const char received = static_cast<char>(Serial.read());
+
+        if (received == '\r' || received == '\n')
+        {
+            if (commandLength > 0U)
+            {
+                commandBuffer[commandLength] = '\0';
+                executeCommand(commandBuffer);
+                commandLength = 0U;
+            }
+
+            continue;
+        }
+
+        if (received == ' ' || received == '\t')
+        {
+            continue;
+        }
+
+        if (commandLength < COMMAND_BUFFER_SIZE - 1U)
+        {
+            commandBuffer[commandLength] = toUpperAscii(received);
+            ++commandLength;
+        }
+        else
+        {
+            commandLength = 0U;
+            Serial.println(F("Command too long; buffer cleared."));
+        }
+    }
+}
+}  // namespace
+
+// Encoder A uses D68/A14 = PCINT22, which belongs to PCINT2_vect.
+ISR(PCINT2_vect)
+{
+    encoderA.update();
+}
+
+// Encoder B uses D52 = PCINT1, which belongs to PCINT0_vect.
+ISR(PCINT0_vect)
+{
+    encoderB.update();
 }
 
 void setup()
 {
     Serial.begin(SystemConfig::SERIAL_BAUD_RATE);
 
-    motor1.begin();
-    motor2.begin();
+    // Motor initialisation is required for the pre-homing pulse tests.
+    // PlotterSystem::begin() safely initialises the same drivers again later.
+    motorA.begin();
+    motorB.begin();
+    Encoder::zeroCountPair(encoderA, encoderB);
 
-    for (uint8_t index = 0; index < LIMIT_COUNT; ++index)
-    {
-        limitSwitches[index]->begin();
-        previousPressedState[index] = limitSwitches[index]->isPressed();
-    }
+    // Each active-high switch uses its own rising-edge external interrupt.
+    leftLimitSwitch.begin(onLeftLimitSwitchInterrupt);
+    rightLimitSwitch.begin(onRightLimitSwitchInterrupt);
+    bottomLimitSwitch.begin(onBottomLimitSwitchInterrupt);
+    topLimitSwitch.begin(onTopLimitSwitchInterrupt);
 
-    attachLimitInterrupt(
-        PinConfig::LIMIT_SWITCH_LEFT_PIN,
-        leftLimitISR,
-        limitNames[LIMIT_LEFT]);
-
-    attachLimitInterrupt(
-        PinConfig::LIMIT_SWITCH_RIGHT_PIN,
-        rightLimitISR,
-        limitNames[LIMIT_RIGHT]);
-
-    attachLimitInterrupt(
-        PinConfig::LIMIT_SWITCH_BOTTOM_PIN,
-        bottomLimitISR,
-        limitNames[LIMIT_BOTTOM]);
-
-    attachLimitInterrupt(
-        PinConfig::LIMIT_SWITCH_TOP_PIN,
-        topLimitISR,
-        limitNames[LIMIT_TOP]);
-
-    if (anyRawLimitPressed() || anyDebouncedLimitPressed())
-    {
-        limitStopLatched = true;
-    }
+    lastLeftPressed = leftLimitSwitch.isPressed();
+    lastRightPressed = rightLimitSwitch.isPressed();
+    lastBottomPressed = bottomLimitSwitch.isPressed();
+    lastTopPressed = topLimitSwitch.isPressed();
 
     Serial.println();
-    Serial.println(F("ME306 combined hardware diagnostic ready."));
-    Serial.println(F("Motor outputs are zero and never start automatically."));
-    Serial.println(F("Serial: 115200 baud. Send h for commands."));
-    printSnapshot();
+    Serial.println(F("ME306 plotter hardware bring-up console"));
+    Serial.println(F("Active-high limits; automatic homing is DISARMED."));
+    Serial.print(F("Temporary motor command limit: "));
+    Serial.println(BRINGUP_MOTOR_OUTPUT_LIMIT);
+    printHelp();
+    printStatus();
+
+    if (anyLimitSwitchPressed())
+    {
+        Serial.println(F("WARNING: one or more switches are active at startup."));
+    }
 }
 
 void loop()
 {
-    // Safety-related work is serviced before serial motor commands.
-    updateAndReportLimitSwitches();
-    serviceRawLimitInterrupts();
-    serviceMotorPulseTimeout();
+    pollSerialCommands();
 
-    while (Serial.available() > 0)
+    if (!systemStarted)
     {
-        handleSerialCommand(static_cast<char>(Serial.read()));
+        updateAllLimitSwitches();
+        updateManualPulse();
+    }
+    else
+    {
+        // HomingController owns switch updates during HOMING. Outside homing,
+        // main keeps debouncing alive and supplies the basic unexpected-limit
+        // safety path required during a normal move.
+        if (plotterSystem.state() != plotter::PlotterState::HOMING)
+        {
+            updateAllLimitSwitches();
+
+            if (plotterSystem.state() == plotter::PlotterState::MOVING &&
+                anyLimitSwitchPressed())
+            {
+                plotterSystem.reportFault(
+                    plotter::FaultCode::UNEXPECTED_LIMIT);
+            }
+        }
+
+        plotterSystem.update();
     }
 
-    const unsigned long now = millis();
-    if (telemetryEnabled &&
-        ((now - lastTelemetryMs) >= DiagnosticConfig::TELEMETRY_INTERVAL_MS))
-    {
-        lastTelemetryMs = now;
-        printSnapshot();
-    }
+    monitorSwitchChanges();
+    monitorMoveTelemetry();
+    monitorSystemChanges();
 }

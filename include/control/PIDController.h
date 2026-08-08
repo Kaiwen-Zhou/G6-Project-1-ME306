@@ -1,15 +1,21 @@
 #pragma once
 
 /*
- * Reusable P/PI controller for the MECHENG 306 X-Y plotter.
+ * PI position controller with velocity feedforward.
  *
- * The class is called PIDController to match the project file names. The
- * current implementation uses proportional and integral control only because
- * a derivative term is not required unless hardware testing shows a need for
- * it. Set Ki to zero for proportional-only control.
+ * Feedback:
+ *     Kp * positionError + accumulated Ki * positionError * dt
  *
- * Each object contains its own gains, integral state, and limits. Therefore,
- * the same class can be used for two separate controller instances.
+ * Feedforward:
+ *     Kv * targetVelocity
+ *
+ * Position error is normally measured in encoder counts.
+ * Target velocity is normally measured in counts/s.
+ * The final output uses motor-command/PWM units.
+ * u = Kp ​e + I + Kv ​Vreference​
+ * e: reference count - actual count
+ * targetVelocityCountsPerSecond: trajectory reference generated A/B reference velocity
+ * Kp/Ki/Kv: PWM/count or count's or count/s
  */
 class PIDController
 {
@@ -19,36 +25,39 @@ public:
                   float minimumOutput,
                   float maximumOutput,
                   float minimumIntegralOutput,
-                  float maximumIntegralOutput);
+                  float maximumIntegralOutput,
+                  float velocityFeedforwardGain = 0.0f);
 
-    // Calculate one control update from the current error.
-    // timeStepSeconds should be the control-loop period in seconds.
+    // PI position feedback plus velocity feedforward.
+    float update(float error, float targetVelocityCountsPerSecond, float timeStepSeconds);
+
+    // Compatibility overload for existing code.
+    // Equivalent to target velocity = 0.
     float update(float error, float timeStepSeconds);
 
-    // Clear the stored integral output.
+    // Clear the stored integral contribution.
     void reset();
 
-    // Change P and I gains without changing the stored integral output.
-    // Call reset() before starting a new tuning test.
+    // Change feedback gains without changing the stored integral state.
     void setGains(float proportionalGain, float integralGain);
 
-    // Change the final controller-output limits.
-    // minimumOutput must be less than or equal to maximumOutput.
+    void setVelocityFeedforwardGain( float velocityFeedforwardGain);
+
     void setOutputLimits(float minimumOutput, float maximumOutput);
 
-    // Change the limits applied to the integral contribution.
-    // These values use the same units as the controller output.
-    void setIntegralLimits(float minimumIntegralOutput,
-                           float maximumIntegralOutput);
+    void setIntegralLimits(float minimumIntegralOutput, float maximumIntegralOutput);
 
-    // Read-only access for tests and telemetry.
     float getProportionalGain() const;
     float getIntegralGain() const;
+    float getVelocityFeedforwardGain() const;
     float getIntegralOutput() const;
 
 private:
     float proportionalGain_;
     float integralGain_;
+    float velocityFeedforwardGain_;
+
+    // Integral contribution in motor-output units.
     float integralOutput_;
 
     float minimumOutput_;

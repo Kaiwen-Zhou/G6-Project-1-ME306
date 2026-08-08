@@ -10,10 +10,10 @@ class LimitSwitch
 public:
 
     LimitSwitch(uint8_t pin,
-                uint8_t mode = INPUT_PULLUP,
+                uint8_t mode = INPUT,
                 unsigned long debounceTime = 20);
                 // pin - Arduino digital input pin
-                // mode - INOUT or INPUT_PULLUP
+                // mode - INPUT or INPUT_PULLUP
                 // debounceTime - debouncing interval in milliseconds
 
     // Initialise the switch hardware.

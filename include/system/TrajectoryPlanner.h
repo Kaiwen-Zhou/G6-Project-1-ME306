@@ -1,19 +1,18 @@
 #pragma once
 
 /**
- * TrajectoryPlanner.h
- * Linear Cartesian trajectory planner for the MECHENG 306 X-Y plotter.
+ * Linear Cartesian trajectory planner for the plotter.
  *
- * One move is defined by a fixed start point and a fixed target point.
- * The planner uses one shared path distance for X and Y, so every generated
- * reference lies on the straight line between those two points.
+ * One move is defined by a fixed start point and target point. The generated
+ * displacement reference is relative to the start of the current move:
  *
- * The feedrate is supplied in mm/min to match the G01 F value. The planner
- * converts it to mm/s and generates a trapezoidal velocity profile. For a
- * short move, it automatically generates a triangular velocity profile.
+ *     start of move -> displacement (0, 0)
+ *     end of move   -> displacement (target - start)
  *
- * This class does not parse G-code, convert X/Y to encoder counts, read
- * encoders, or control motors. Those jobs belong to other modules.
+ * This allows the output to be passed directly to XYCoordinator.
+ *
+ * Feedrate is supplied in mm/min to match the G1 F value. Internally the
+ * planner generates either a trapezoidal or triangular velocity profile.
  */
 
 namespace plotter
@@ -21,12 +20,15 @@ namespace plotter
 
 struct TrajectoryReference
 {
-    float xPositionMm;
-    float yPositionMm;
+    // Relative to the start of the current move.
+    float xDisplacementMm;
+    float yDisplacementMm;
+
     float xVelocityMmPerSecond;
     float yVelocityMmPerSecond;
+
     // This becomes true when reference generation reaches the target.
-    // The system must still wait for both AxisControllers to settle.
+    // The system must still wait for both motor controllers to settle.
     bool complete;
 };
 
@@ -38,34 +40,34 @@ public:
     // Start one straight-line move.
     //
     // startX/startY and targetX/targetY are Cartesian positions in mm.
-    // For this project's relative G-code, the caller calculates:
-    // target = start + G01 offset before calling this function.
-    // feedrateMmPerMinute is the G01 F value.
+    // Generated references are still relative to startX/startY.
+    //
+    // feedrateMmPerMinute is the G1 F value.
     // maxAccelerationMmPerSecondSquared is the path acceleration limit.
     //
     // Returns false when feedrate or acceleration is not positive.
-    bool startMove(float startXMm,
-                   float startYMm,
-                   float targetXMm,
-                   float targetYMm,
-                   float feedrateMmPerMinute,
-                   float maxAccelerationMmPerSecondSquared);
+    bool startMove(
+        float startXMm,
+        float startYMm,
+        float targetXMm,
+        float targetYMm,
+        float feedrateMmPerMinute,
+        float maxAccelerationMmPerSecondSquared);
 
-    // Advance the trajectory by dt seconds and return the new reference.
+    // Advance the trajectory by dt seconds.
     // A non-positive dt leaves the reference unchanged.
     TrajectoryReference update(float timeStepSeconds);
 
-    // Cancel the current move and hold the latest generated position.
+    // Cancel the current move and hold the latest displacement.
     void stop();
 
     bool isActive() const;
     bool isComplete() const;
 
 private:
-    float startXMm_;
-    float startYMm_;
-    float targetXMm_;
-    float targetYMm_;
+    // Final displacement relative to the beginning of the move.
+    float targetXDisplacementMm_;
+    float targetYDisplacementMm_;
 
     float directionX_;
     float directionY_;
@@ -83,6 +85,7 @@ private:
     float elapsedTimeSeconds_;
 
     TrajectoryReference reference_;
+
     bool active_;
     bool complete_;
 };
