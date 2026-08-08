@@ -1,38 +1,54 @@
+/* Note: Converter returns current move's relative A/B displacement
+    XYCoordinator will need to add
+    absoluteAReference =
+        startCountA + motorReference.aDisplacementCounts;
+
+    absoluteBReference =
+        startCountB + motorReference.bDisplacementCounts;
+*/
+
 #pragma once
 
-#include <Arduino.h>
-#include "hardware/Encoder.h"
+#include <stdint.h>
 
-class Converter {
+class Converter
+{
 public:
-    struct CartesianDelta {float deltaX; float deltaY;};
+    struct MotorReference
+    {
+        // Relative to the start of the current G1 move.
+        float aDisplacementCounts;
+        float bDisplacementCounts;
 
-    Converter(Encoder& encoderA, Encoder& encoderB);
+        float aVelocityCountsPerSecond;
+        float bVelocityCountsPerSecond;
+    };
 
-    // Call after encoders have been initialised or zeroed
-    void begin();
+    struct CartesianDisplacement
+    {
+        float xMm;
+        float yMm;
+    };
 
-    // Call repeatedly from loop/control update, not from an ISR
-    void update();
+    Converter(float motorAMmPerCount,
+              float motorBMmPerCount,
+              int8_t motorACoordinateSign = 1,
+              int8_t motorBCoordinateSign = 1);
 
-    float getDeltaX() const;
-    float getDeltaY() const;
+    MotorReference cartesianToMotorReference(
+        float xDisplacementMm,
+        float yDisplacementMm,
+        float xVelocityMmPerSecond,
+        float yVelocityMmPerSecond) const;
 
-    int32_t getDeltaA() const;
-    int32_t getDeltaB() const;
+    CartesianDisplacement motorToCartesianDisplacement(
+        float aDisplacementCounts,
+        float bDisplacementCounts) const;
 
 private:
-    CartesianDelta convertToXY(int32_t deltaA, int32_t deltaB) const;
+    float motorAMmPerCount_;
+    float motorBMmPerCount_;
 
-    Encoder& encoderA_;
-    Encoder& encoderB_;
-
-    int32_t previousCountA_;
-    int32_t previousCountB_;
-
-    int32_t deltaA_;
-    int32_t deltaB_;
-
-    float deltaX_;
-    float deltaY_;
+    float motorACoordinateSign_;
+    float motorBCoordinateSign_;
 };

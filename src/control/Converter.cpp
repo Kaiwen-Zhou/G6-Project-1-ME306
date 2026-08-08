@@ -1,75 +1,54 @@
 #include "control/Converter.h"
-#include "config/SystemConfig.h"
 
-Converter::Converter(Encoder& encoderA, Encoder& encoderB)
-    : encoderA_(encoderA),
-      encoderB_(encoderB),
-      previousCountA_(0),
-      previousCountB_(0),
-      deltaA_(0),
-      deltaB_(0),
-      deltaX_(0.0f),
-      deltaY_(0.0f)
-{}
-
-void Converter::begin() {
-    // Establish the initial count reference without producing
-    // an artificial movement on the first update.
-    Encoder::CountPair counts = Encoder::getCountPair(encoderA_, encoderB_);
-
-    previousCountA_ = counts.countA;
-    previousCountB_ = counts.countB;
-
-    deltaA_ = 0;
-    deltaB_ = 0;
-    deltaX_ = 0.0f;
-    deltaY_ = 0.0f;
+Converter::Converter(float motorAMmPerCount,
+                     float motorBMmPerCount,
+                     int8_t motorACoordinateSign,
+                     int8_t motorBCoordinateSign)
+    : motorAMmPerCount_(motorAMmPerCount),
+      motorBMmPerCount_(motorBMmPerCount),
+      motorACoordinateSign_(motorACoordinateSign < 0 ? -1.0f : 1.0f),
+      motorBCoordinateSign_(motorBCoordinateSign < 0 ? -1.0f : 1.0f)
+{
 }
 
-void Converter::update() {
-    // A and B are captured during the same atomic block.
-    Encoder::CountPair counts = Encoder::getCountPair(encoderA_, encoderB_);
+Converter::MotorReference
+Converter::cartesianToMotorReference(
+    float xDisplacementMm,
+    float yDisplacementMm,
+    float xVelocityMmPerSecond,
+    float yVelocityMmPerSecond) const {
+    const float aDisplacementMm = xDisplacementMm + yDisplacementMm;
 
-    // Movement since the previous update
-    deltaA_ = counts.countA - previousCountA_;
-    deltaB_ = counts.countB - previousCountB_;
+    const float bDisplacementMm = xDisplacementMm - yDisplacementMm;
 
-    previousCountA_ = counts.countA;
-    previousCountB_ = counts.countB;
+    const float aVelocityMmPerSecond = xVelocityMmPerSecond + yVelocityMmPerSecond;
 
-    CartesianDelta cartesianDelta = convertToXY(deltaA_, deltaB_);
+    const float bVelocityMmPerSecond = xVelocityMmPerSecond - yVelocityMmPerSecond;
 
-    deltaX_ = cartesianDelta.deltaX;
-    deltaY_ = cartesianDelta.deltaY;
+    const float signedAMmPerCount = motorAMmPerCount_ * motorACoordinateSign_;
+
+    const float signedBMmPerCount = motorBMmPerCount_ * motorBCoordinateSign_;
+
+    return {
+        aDisplacementMm / signedAMmPerCount,
+        bDisplacementMm / signedBMmPerCount,
+        aVelocityMmPerSecond / signedAMmPerCount,
+        bVelocityMmPerSecond / signedBMmPerCount
+    };
 }
 
-Converter::CartesianDelta Converter::convertToXY(int32_t deltaA,int32_t deltaB) const {
-    const float displacementA =
-        static_cast<float>(deltaA) * SystemConfig::MOTOR_OUTPUT_DISTANCE_PER_COUNT;
+Converter::CartesianDisplacement
+Converter::motorToCartesianDisplacement(
+    float aDisplacementCounts,
+    float bDisplacementCounts) const {
+    const float aDisplacementMm =
+        aDisplacementCounts * motorAMmPerCount_ * motorACoordinateSign_;
 
-    const float displacementB =
-        static_cast<float>(deltaB) * SystemConfig::MOTOR_OUTPUT_DISTANCE_PER_COUNT;
+    const float bDisplacementMm =
+        bDisplacementCounts * motorBMmPerCount_ * motorBCoordinateSign_;
 
-    CartesianDelta result;
-
-    result.deltaX = (displacementA + displacementB) * 0.5f;
-    result.deltaY = (displacementA - displacementB) * 0.5f;
-
-    return result;
-}
-
-float Converter::getDeltaX() const {
-    return deltaX_;
-}
-
-float Converter::getDeltaY() const {
-    return deltaY_;
-}
-
-int32_t Converter::getDeltaA() const {
-    return deltaA_;
-}
-
-int32_t Converter::getDeltaB() const {
-    return deltaB_;
+    return {
+        0.5f * (aDisplacementMm + bDisplacementMm),
+        0.5f * (aDisplacementMm - bDisplacementMm)
+    };
 }
