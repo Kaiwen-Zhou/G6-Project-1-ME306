@@ -2,42 +2,48 @@
 
 #include <Arduino.h>
 
-namespace plotter {
+#include "config/SystemConfig.h"
+
+namespace plotter
+{
 
 namespace
 {
-// Temporary settling requirement for fixed A/B target tests.
-// Move this value to SystemConfig later.
-constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
+constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 }
 
-PlotterSystem::PlotterSystem(AxisController& axisA,
-                             AxisController& axisB)
+PlotterSystem::PlotterSystem(
+    AxisController& axisA,
+    AxisController& axisB,
+    XYCoordinator& xyCoordinator,
+    TrajectoryPlanner& trajectoryPlanner)
     : axisA_(axisA),
       axisB_(axisB),
-      pendingAxisATargetCount_(0),
-      pendingAxisBTargetCount_(0),
+      xyCoordinator_(xyCoordinator),
+      trajectoryPlanner_(trajectoryPlanner),
+      pendingXDisplacementMm_(0.0f),
+      pendingYDisplacementMm_(0.0f),
+      pendingFeedrateMmPerMinute_(0.0f),
+      pendingAccelerationMmPerSecondSquared_(0.0f),
+      lastTrajectoryUpdateMicros_(0),
       moveSettling_(false),
       moveSettlingStartMicros_(0)
 {
 }
 
-void PlotterSystem::begin()
-{
-    axisA_.begin();
-    axisB_.begin();
+void PlotterSystem::begin() {
+    // XYCoordinator owns the coordinated A/B control lifecycle and
+    // initialises both AxisController instances.
+    xyCoordinator_.begin();
 
     fsm_.begin();
 
-    // Startup homing is a system policy rather than an FSM reset state.
-    // The system therefore follows IDLE -> HOMING after initialisation.
+    // Startup homing remains a system policy.
     dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
-void PlotterSystem::update()
-{
-    switch (fsm_.state())
-    {
+void PlotterSystem::update() {
+    switch (fsm_.state()) {
         case PlotterState::IDLE:
             break;
 
@@ -50,189 +56,224 @@ void PlotterSystem::update()
             break;
 
         case PlotterState::FAULT:
-            // Both motor-space controllers were stopped by ENTER_FAULT.
+            // ENTER_FAULT already stopped all motion.
             break;
     }
 }
 
-FSMResult PlotterSystem::requestHoming()
-{
+FSMResult PlotterSystem::requestHoming() {
     return dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
 FSMResult PlotterSystem::requestMove(
-    int32_t axisATargetCount,
-    int32_t axisBTargetCount)
-{
-    const FSMResult result =
-        fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
+    float xDisplacementMm,
+    float yDisplacementMm,
+    float feedrateMmPerMinute,
+    float maxAccelerationMmPerSecondSquared) {
+    // Using !(value > 0) also rejects NaN.
+    if (!(feedrateMmPerMinute > 0.0f) || !(maxAccelerationMmPerSecondSquared > 0.0f)) {
+        const PlotterState currentState = fsm_.state();
 
-    if (!result.accepted)
-    {
+        return {
+            false,
+            currentState,
+            currentState,
+            PlotterAction::NONE,
+            RejectReason::INVALID_MOTION_PARAMETERS
+        };
+    }
+
+    const FSMResult result = fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
+
+    if (!result.accepted) {
         return result;
     }
 
-    // These are absolute motor-space encoder-count targets.
-    // Store the payload only after the FSM accepts the request.
-    pendingAxisATargetCount_ = axisATargetCount;
-    pendingAxisBTargetCount_ = axisBTargetCount;
+    // Store the command payload only after the FSM accepts the move.
+    pendingXDisplacementMm_ = xDisplacementMm;
+
+    pendingYDisplacementMm_ = yDisplacementMm;
+
+    pendingFeedrateMmPerMinute_ = feedrateMmPerMinute;
+
+    pendingAccelerationMmPerSecondSquared_ = maxAccelerationMmPerSecondSquared;
 
     executeAction(result.action);
 
     return result;
 }
 
-FSMResult PlotterSystem::reportHomingComplete()
-{
+FSMResult PlotterSystem::reportHomingComplete() {
     return dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
 }
 
-FSMResult PlotterSystem::reportFault(FaultCode faultCode)
-{
-    return dispatchAndExecute(
-        FSMEventType::FAULT_DETECTED,
-        faultCode);
+FSMResult PlotterSystem::reportFault(FaultCode faultCode) {
+    return dispatchAndExecute( FSMEventType::FAULT_DETECTED, faultCode);
 }
 
-FSMResult PlotterSystem::resetFault()
-{
-    return dispatchAndExecute(
-        FSMEventType::FAULT_RESET_REQUESTED);
+FSMResult PlotterSystem::resetFault() {
+    return dispatchAndExecute(FSMEventType::FAULT_RESET_REQUESTED);
 }
 
-PlotterState PlotterSystem::state() const
-{
+PlotterState PlotterSystem::state() const {
     return fsm_.state();
 }
 
-bool PlotterSystem::machineZeroKnown() const
-{
+bool PlotterSystem::machineZeroKnown() const {
     return fsm_.machineZeroKnown();
 }
 
-FaultCode PlotterSystem::activeFault() const
-{
+FaultCode PlotterSystem::activeFault() const {
     return fsm_.activeFault();
 }
 
-FSMResult PlotterSystem::dispatchAndExecute(
-    FSMEventType event,
-    FaultCode faultCode)
-{
-    const FSMResult result =
-        fsm_.dispatch(event, faultCode);
+FSMResult PlotterSystem::dispatchAndExecute(FSMEventType event, FaultCode faultCode) {
+    const FSMResult result = fsm_.dispatch(event, faultCode);
 
-    if (result.accepted)
-    {
+    if (result.accepted) {
         executeAction(result.action);
     }
 
     return result;
 }
 
-void PlotterSystem::executeAction(PlotterAction action)
-{
-    switch (action)
-    {
+void PlotterSystem::executeAction(PlotterAction action) {
+    switch (action) {
         case PlotterAction::NONE:
             break;
 
         case PlotterAction::START_HOMING:
-            stopAllAxes();
+            stopAllMotion();
 
-            // HomingController will be started here once its
-            // non-blocking interface is available.
+            // HomingController will be started here when its current
+            // interface is integrated.
             break;
 
         case PlotterAction::START_MOVING:
+        {
             moveSettling_ = false;
 
-            // startTracking() resets each PID only once.
-            axisA_.startTracking();
-            axisB_.startTracking();
+            // Because the planner now outputs displacement relative to
+            // the current move, it can use (0, 0) as its local start.
+            const bool trajectoryStarted =
+                trajectoryPlanner_.startMove(
+                    0.0f,
+                    0.0f,
+                    pendingXDisplacementMm_,
+                    pendingYDisplacementMm_,
+                    pendingFeedrateMmPerMinute_,
+                    pendingAccelerationMmPerSecondSquared_);
 
-            // Apply the fixed A/B references without resetting the PIDs.
-            axisA_.setReferencePosition(
-                pendingAxisATargetCount_);
+            if (!trajectoryStarted) {
+                // Parameters were already validated, so failure here
+                // indicates an internal inconsistency.
+                reportFault(FaultCode::INTERNAL_ERROR);
 
-            axisB_.setReferencePosition(
-                pendingAxisBTargetCount_);
+                break;
+            }
+
+            // Capture one synchronized A/B encoder snapshot and use it
+            // as the origin of this move.
+            xyCoordinator_.startMove();
+
+            lastTrajectoryUpdateMicros_ = micros();
+
+            // Apply the initial zero-displacement reference.
+            const TrajectoryReference initialReference = trajectoryPlanner_.update(0.0f);
+
+            xyCoordinator_.setCartesianReference(
+                initialReference.xDisplacementMm,
+                initialReference.yDisplacementMm,
+                initialReference.xVelocityMmPerSecond,
+                initialReference.yVelocityMmPerSecond);
+
             break;
+        }
 
         case PlotterAction::FINISH_HOMING:
-            stopAllAxes();
-            break;
-
         case PlotterAction::FINISH_MOVING:
-            stopAllAxes();
-            break;
-
         case PlotterAction::ENTER_FAULT:
-            stopAllAxes();
-            break;
-
         case PlotterAction::CLEAR_FAULT:
-            stopAllAxes();
-            axisA_.reset();
-            axisB_.reset();
+            stopAllMotion();
             break;
     }
 }
 
-void PlotterSystem::updateHoming()
-{
+void PlotterSystem::updateHoming() {
     // Future implementation:
     //
     // homingController_.update();
     //
     // if (homingController_.isComplete())
     // {
-    //     dispatchAndExecute(FSMEventType::HOMING_COMPLETED);
+    //     dispatchAndExecute(
+    //         FSMEventType::HOMING_COMPLETED);
     // }
     //
     // if (homingController_.hasFault())
     // {
-    //     reportFault(homingController_.faultCode());
+    //     reportFault(
+    //         homingController_.faultCode());
     // }
 }
 
-void PlotterSystem::updateMoving()
-{
-    axisA_.update();
-    axisB_.update();
+void PlotterSystem::updateMoving() {
+    const unsigned long currentTimeMicros = micros();
 
-    // For the current fixed-target implementation, the movement is
-    // settled when both motor-space controllers remain within tolerance
-    // continuously for the configured settling time.
-    if (!axisA_.isWithinTolerance() ||
-        !axisB_.isWithinTolerance())
-    {
+    const unsigned long elapsedMicros =
+        currentTimeMicros - lastTrajectoryUpdateMicros_;
+
+    if (elapsedMicros > 0) {
+        lastTrajectoryUpdateMicros_ = currentTimeMicros;
+
+        const float timeStepSeconds =
+            static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
+
+        const TrajectoryReference reference =
+            trajectoryPlanner_.update(timeStepSeconds);
+
+        xyCoordinator_.setCartesianReference(
+            reference.xDisplacementMm,
+            reference.yDisplacementMm,
+            reference.xVelocityMmPerSecond,
+            reference.yVelocityMmPerSecond);
+    }
+
+    // XYCoordinator performs one synchronized encoder snapshot and
+    // gives both AxisControllers the same dt.
+    xyCoordinator_.update();
+
+    // Intermediate trajectory references are not move completion.
+    if (!trajectoryPlanner_.isComplete()) {
         moveSettling_ = false;
         return;
     }
 
-    const unsigned long currentTimeMicros = micros();
+    // The trajectory has reached the final reference, but the physical
+    // A/B axes may still be following it.
+    if (!axisA_.isWithinTolerance() || !axisB_.isWithinTolerance()) {
+        moveSettling_ = false;
+        return;
+    }
 
-    if (!moveSettling_)
-    {
+    if (!moveSettling_) {
         moveSettling_ = true;
         moveSettlingStartMicros_ = currentTimeMicros;
+
         return;
     }
 
     const unsigned long settledTimeMicros =
         currentTimeMicros - moveSettlingStartMicros_;
 
-    if (settledTimeMicros >= MOVE_SETTLE_TIME_MICROS)
-    {
+    if (settledTimeMicros >= SystemConfig::MOVE_SETTLE_TIME_MICROS) {
         dispatchAndExecute(FSMEventType::MOVE_COMPLETED);
     }
 }
 
-void PlotterSystem::stopAllAxes()
-{
-    axisA_.stop();
-    axisB_.stop();
+void PlotterSystem::stopAllMotion() {
+    trajectoryPlanner_.stop();
+    xyCoordinator_.stop();
 
     moveSettling_ = false;
 }

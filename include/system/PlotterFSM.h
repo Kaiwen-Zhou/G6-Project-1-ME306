@@ -54,7 +54,8 @@ enum class RejectReason : uint8_t {
     BUSY,
     MACHINE_ZERO_UNKNOWN,
     FAULT_ACTIVE,
-    UNEXPECTED_EVENT
+    UNEXPECTED_EVENT,
+    INVALID_MOTION_PARAMETERS
 };
 
 enum class PlotterAction : uint8_t {
