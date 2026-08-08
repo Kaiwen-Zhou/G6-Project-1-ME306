@@ -7,51 +7,63 @@
 #include "hardware/MotorDriver.h"
 
 // Motor-space telemetry for one A/B control channel.
-// Cartesian X/Y telemetry is calculated by XYCoordinator.
+// Cartesian telemetry is calculated by XYCoordinator.
 struct AxisTelemetry
 {
-    int32_t referencePosition;
+    float referencePosition;
+    float referenceVelocity;
     int32_t currentPosition;
-    int32_t trackingError;
+    float trackingError;
     int16_t motorOutput;
     float integralOutput;
     bool withinTolerance;
     bool active;
 };
 
-// Tracks one motor-space encoder-count reference using one motor,
-// one encoder and one PIDController.
-//
-// Each instance controls either motor coordinate A or B.
-// Cartesian conversion, trajectory generation, homing and complete-move
-// detection are handled by higher-level system modules.
 class AxisController
 {
 public:
+    // New constructor used by XYCoordinator.
+    // Encoder readings and control timing are supplied externally.
+    AxisController(PIDController& pidController, MotorDriver& motor, float positionTolerance);
+
+    // Temporary compatibility constructor for the current PlotterSystem.
+    // Remove after XYCoordinator is integrated.
     AxisController(Encoder& encoder,
                    PIDController& pidController,
                    MotorDriver& motor,
                    int32_t positionTolerance,
                    unsigned long updateIntervalMicros);
 
-    // Initialise the motor and leave the controller stopped.
     void begin();
 
-    // Start reference tracking and reset the PID state once.
+    // New interface: begin tracking from a synchronised encoder snapshot.
+    void startTracking(int32_t currentPosition);
+
+    // Temporary compatibility interface.
     void startTracking();
 
-    // Update the encoder-count reference without resetting the PID.
-    // This function does not activate an inactive controller.
+    // Set the continuously changing motor-space trajectory reference.
+    void setReference(float referencePosition, float referenceVelocityCountsPerSecond);
+
+    // Temporary fixed-position compatibility interface.
     void setReferencePosition(int32_t referencePosition);
 
-    // Run one non-blocking control update when the configured interval
-    // has elapsed.
+    // New interface: execute exactly one control calculation.
+    //
+    // currentPosition comes from the synchronised A/B encoder snapshot.
+    // timeStepSeconds is shared by both motor controllers.
+    void update(int32_t currentPosition, float timeStepSeconds);
+
+    // Temporary internally timed compatibility interface.
     void update();
 
-    // Stop the motor, deactivate tracking and clear the PID state.
     void stop();
 
-    // Stop tracking and use the current encoder position as the reference.
+    // Reset using a supplied synchronised encoder position.
+    void reset(int32_t currentPosition);
+
+    // Temporary compatibility interface.
     void reset();
 
     bool isActive() const;
@@ -59,16 +71,25 @@ public:
     AxisTelemetry getTelemetry() const;
 
 private:
-    bool isErrorWithinTolerance(int32_t error) const;
+    bool isErrorWithinTolerance(float error) const;
+    int16_t convertToMotorCommand(float controllerOutput) const;
 
-    Encoder& encoder_;
+    // Used only by the temporary compatibility interfaces.
+    Encoder* legacyEncoder_;
+
     PIDController& pidController_;
     MotorDriver& motor_;
 
-    int32_t positionTolerance_;
-    unsigned long updateIntervalMicros_;
+    float positionTolerance_;
 
-    int32_t referencePosition_;
-    unsigned long lastUpdateMicros_;
+    // Used only by the temporary update() interface.
+    unsigned long legacyUpdateIntervalMicros_;
+    unsigned long legacyLastUpdateMicros_;
+
+    float referencePosition_;
+    float referenceVelocity_;
+    int32_t currentPosition_;
+    float trackingError_;
+
     bool active_;
 };
