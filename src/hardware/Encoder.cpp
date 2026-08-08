@@ -87,7 +87,7 @@ void Encoder::update() {
 
     // Direction is true for clockwise and false for counter clockwise
     // COULD RENAME GET DIRECTION FUNCTION TO INDICATE IF TURNING CLOCKWISE OR COUNTER CLOCKWISE
-    direction = (Acur == Bprev);
+    direction = (Acur == Bcur);
 
     // Increment counter in direction of movement
     if (direction) {

@@ -1,33 +1,38 @@
 #pragma once
 
-#include <atomic>
-#include <stdint.h>
-#include <math.h>
 #include <Arduino.h>
+#include "hardware/Encoder.h"
 
 class Converter {
- public:
-    Converter(float deltaX = 0, float deltaY = 0, int32_t deltaA = 0, int32_t deltaB = 0);
+public:
+    struct CartesianDelta {float deltaX; float deltaY;};
 
-    void setDeltaX(float deltaX) {deltaX_ = deltaX;}
-    void setDeltaY(float deltaY) {deltaY_ = deltaY;}
-    void setDeltaA(int32_t deltaA) {deltaA_ = deltaA;}
-    void setDeltaB(int32_t deltaB) {deltaB_ = deltaB;}
+    Converter(Encoder& encoderA, Encoder& encoderB);
+
+    // Call after encoders have been initialised or zeroed
+    void begin();
+
+    // Call repeatedly from loop/control update, not from an ISR
+    void update();
 
     float getDeltaX() const;
     float getDeltaY() const;
+
     int32_t getDeltaA() const;
     int32_t getDeltaB() const;
 
-    int32_t convertToXY(int32_t deltaA, int32_t deltaB) const {
-        // Conversion logic from motor-space (A/B) to Cartesian (X/Y)
-    }
+private:
+    CartesianDelta convertToXY(int32_t deltaA, int32_t deltaB) const;
 
+    Encoder& encoderA_;
+    Encoder& encoderB_;
 
+    int32_t previousCountA_;
+    int32_t previousCountB_;
 
- private:
-    std::atomic<float> deltaX_;
-    std::atomic<float> deltaY_;
-    std::atomic<int32_t> deltaA_;
-    std::atomic<int32_t> deltaB_;
-}; 
+    int32_t deltaA_;
+    int32_t deltaB_;
+
+    float deltaX_;
+    float deltaY_;
+};
