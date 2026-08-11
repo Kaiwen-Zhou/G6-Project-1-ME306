@@ -37,10 +37,10 @@ constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 
 // Initial homing values. These PWM values and distances must be tuned on the
 // real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 60;
-constexpr uint8_t HOMING_BACKOFF_PWM = 40;
-constexpr uint8_t HOMING_FINE_APPROACH_PWM = 20;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 10;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 255;
+constexpr uint8_t HOMING_BACKOFF_PWM = 200;
+constexpr uint8_t HOMING_FINE_APPROACH_PWM = 150;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 150;
 
 constexpr float HOMING_BACKOFF_DISTANCE_MM = 2.0f;
 

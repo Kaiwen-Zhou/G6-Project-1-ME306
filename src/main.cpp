@@ -20,35 +20,40 @@
 namespace
 {
 // -----------------------------------------------------------------------------
-// Initial hardware-bring-up settings
+// High-power hardware bring-up settings
 // -----------------------------------------------------------------------------
-// These controller values are placeholders until the physical system is tuned.
-// Homing is open-loop and does not use these PI values.
-constexpr float INITIAL_PROPORTIONAL_GAIN = 1.0f;
+
+// Closed-loop controller values for initial physical testing.
+// Final values still require proper tuning on the real mechanism.
+constexpr float INITIAL_PROPORTIONAL_GAIN = 5.0f;
 constexpr float INITIAL_INTEGRAL_GAIN = 0.0f;
 constexpr float INITIAL_VELOCITY_FEEDFORWARD_GAIN = 0.0f;
 
-constexpr float CONTROLLER_MINIMUM_OUTPUT = -80.0f;
-constexpr float CONTROLLER_MAXIMUM_OUTPUT = 80.0f;
-constexpr float CONTROLLER_MINIMUM_INTEGRAL_OUTPUT = -40.0f;
-constexpr float CONTROLLER_MAXIMUM_INTEGRAL_OUTPUT = 40.0f;
+// Allow the controller to use the full Arduino PWM range.
+constexpr float CONTROLLER_MINIMUM_OUTPUT = -255.0f;
+constexpr float CONTROLLER_MAXIMUM_OUTPUT = 255.0f;
+
+// Integral is currently disabled because Ki = 0,
+// but the limits are also opened for later tuning.
+constexpr float CONTROLLER_MINIMUM_INTEGRAL_OUTPUT = -255.0f;
+constexpr float CONTROLLER_MAXIMUM_INTEGRAL_OUTPUT = 255.0f;
 
 // Approximately 0.21 mm with the current 14 mm pulley/count conversion.
 constexpr float INITIAL_POSITION_TOLERANCE_COUNTS = 20.0f;
 
-// This temporary limit clamps every motor command, including the homing coarse
-// PWM of 60, while the switch polarity and A/B directions are first verified.
-// Raise it only after the complete low-power homing sequence is correct.
-constexpr uint8_t BRINGUP_MOTOR_OUTPUT_LIMIT = 80;
+// Full MotorDriver output range.
+constexpr uint8_t BRINGUP_MOTOR_OUTPUT_LIMIT = 255;
 
-constexpr uint8_t MANUAL_TEST_PWM = 20; // change here if the manual test pulse is too strong or too weak
-constexpr unsigned long MANUAL_TEST_DURATION_MS = 150UL;
+// Full-power manual motor pulse.
+constexpr uint8_t MANUAL_TEST_PWM = 255;
+
+// Long enough to make physical motion obvious.
+constexpr unsigned long MANUAL_TEST_DURATION_MS = 1000UL;
 
 constexpr size_t COMMAND_BUFFER_SIZE = 20U;
 
-// Conservative closed-loop move-test settings. Test destinations are expressed
-// as fractions of the travel measured by HomingController, so they stay clear
-// of the physical limits even when the final machine dimensions change.
+// Closed-loop move-test settings.
+// These control trajectory speed/acceleration, not the PWM limit.
 constexpr float MOVE_TEST_FEEDRATE_MM_PER_MINUTE = 120.0f;
 constexpr float MOVE_TEST_ACCELERATION_MM_PER_SECOND_SQUARED = 10.0f;
 constexpr float MOVE_TEST_POSITION_EPSILON_MM = 0.05f;
@@ -68,7 +73,6 @@ const FractionalTestPoint TEST_POINT_3 = {0.80f, 0.80f, "P3"};
 const FractionalTestPoint TEST_POINT_4 = {0.20f, 0.80f, "P4"};
 const FractionalTestPoint TEST_POINT_CENTRE = {0.50f, 0.50f, "CENTER"};
 
-// Covers horizontal, vertical, positive diagonal and negative diagonal moves.
 const FractionalTestPoint MOVE_TEST_ROUTE[] = {
     TEST_POINT_1,
     TEST_POINT_2,
@@ -78,7 +82,8 @@ const FractionalTestPoint MOVE_TEST_ROUTE[] = {
     TEST_POINT_3,
     TEST_POINT_4,
     TEST_POINT_2,
-    TEST_POINT_CENTRE};
+    TEST_POINT_CENTRE
+};
 
 constexpr size_t MOVE_TEST_ROUTE_POINT_COUNT =
     sizeof(MOVE_TEST_ROUTE) / sizeof(MOVE_TEST_ROUTE[0]);
@@ -86,6 +91,7 @@ constexpr size_t MOVE_TEST_ROUTE_POINT_COUNT =
 // -----------------------------------------------------------------------------
 // Hardware and control objects - declared in dependency order
 // -----------------------------------------------------------------------------
+
 Encoder encoderA(true);
 Encoder encoderB(false);
 
@@ -174,7 +180,8 @@ const HomingConfig homingConfig = {
     SystemConfig::HOMING_SEARCH_TIMEOUT_MS,
     SystemConfig::HOMING_BACKOFF_TIMEOUT_MS,
     SystemConfig::HOMING_FINAL_RELEASE_TIMEOUT_MS,
-    SystemConfig::HOMING_OVERALL_TIMEOUT_MS};
+    SystemConfig::HOMING_OVERALL_TIMEOUT_MS
+};
 
 HomingController homingController(
     encoderA,
@@ -200,18 +207,26 @@ plotter::PlotterSystem plotterSystem(
 // -----------------------------------------------------------------------------
 // Bring-up console state
 // -----------------------------------------------------------------------------
+
 char commandBuffer[COMMAND_BUFFER_SIZE] = {};
 size_t commandLength = 0U;
 
 bool systemStarted = false;
+
 bool manualPulseActive = false;
 unsigned long manualPulseStartMs = 0UL;
 
+// If manual open-loop motion is performed after homing,
+// the previous machine coordinate reference is no longer trustworthy.
+bool manualMotionSinceHoming = false;
+
 bool moveTestRouteActive = false;
 size_t nextMoveTestRoutePoint = 0U;
+
 bool activeMoveTargetValid = false;
 float activeMoveTargetXMm = 0.0f;
 float activeMoveTargetYMm = 0.0f;
+
 unsigned long lastMoveTelemetryMs = 0UL;
 
 bool lastLeftPressed = false;
@@ -226,6 +241,7 @@ HomingPhase lastHomingPhase = HomingPhase::IDLE;
 // -----------------------------------------------------------------------------
 // Limit-switch external-interrupt callbacks
 // -----------------------------------------------------------------------------
+
 void onLeftLimitSwitchInterrupt()
 {
     leftLimitSwitch.notifyFromISR();
@@ -247,8 +263,9 @@ void onTopLimitSwitchInterrupt()
 }
 
 // -----------------------------------------------------------------------------
-// Small print helpers - no dynamic String allocation
+// Print helpers
 // -----------------------------------------------------------------------------
+
 void printPressedState(bool pressed)
 {
     Serial.print(pressed ? F("PRESSED") : F("released"));
@@ -261,12 +278,15 @@ void printPlotterState(plotter::PlotterState state)
         case plotter::PlotterState::IDLE:
             Serial.print(F("IDLE"));
             break;
+
         case plotter::PlotterState::HOMING:
             Serial.print(F("HOMING"));
             break;
+
         case plotter::PlotterState::MOVING:
             Serial.print(F("MOVING"));
             break;
+
         case plotter::PlotterState::FAULT:
             Serial.print(F("FAULT"));
             break;
@@ -280,21 +300,27 @@ void printHomingStage(HomingStage stage)
         case HomingStage::IDLE:
             Serial.print(F("IDLE"));
             break;
+
         case HomingStage::X_MAX:
             Serial.print(F("X_MAX"));
             break;
+
         case HomingStage::X_ORIGIN:
             Serial.print(F("X_ORIGIN"));
             break;
+
         case HomingStage::Y_MAX:
             Serial.print(F("Y_MAX"));
             break;
+
         case HomingStage::Y_ORIGIN:
             Serial.print(F("Y_ORIGIN"));
             break;
+
         case HomingStage::COMPLETE:
             Serial.print(F("COMPLETE"));
             break;
+
         case HomingStage::ABORTED:
             Serial.print(F("ABORTED"));
             break;
@@ -308,30 +334,39 @@ void printHomingPhase(HomingPhase phase)
         case HomingPhase::IDLE:
             Serial.print(F("IDLE"));
             break;
+
         case HomingPhase::COARSE_APPROACH:
             Serial.print(F("COARSE_APPROACH"));
             break;
+
         case HomingPhase::CONTACT_PAUSE:
             Serial.print(F("CONTACT_PAUSE"));
             break;
+
         case HomingPhase::BACKOFF:
             Serial.print(F("BACKOFF"));
             break;
+
         case HomingPhase::FINE_APPROACH:
             Serial.print(F("FINE_APPROACH"));
             break;
+
         case HomingPhase::FINE_CONTACT_PAUSE:
             Serial.print(F("FINE_CONTACT_PAUSE"));
             break;
+
         case HomingPhase::FINAL_RELEASE:
             Serial.print(F("FINAL_RELEASE"));
             break;
+
         case HomingPhase::RECORD_POSITION:
             Serial.print(F("RECORD_POSITION"));
             break;
+
         case HomingPhase::COMPLETE:
             Serial.print(F("COMPLETE"));
             break;
+
         case HomingPhase::ABORTED:
             Serial.print(F("ABORTED"));
             break;
@@ -345,27 +380,35 @@ void printFaultCode(plotter::FaultCode fault)
         case plotter::FaultCode::NONE:
             Serial.print(F("NONE"));
             break;
+
         case plotter::FaultCode::UNEXPECTED_LIMIT:
             Serial.print(F("UNEXPECTED_LIMIT"));
             break;
+
         case plotter::FaultCode::WRONG_HOMING_LIMIT:
             Serial.print(F("WRONG_HOMING_LIMIT"));
             break;
+
         case plotter::FaultCode::CONTRADICTORY_LIMITS:
             Serial.print(F("CONTRADICTORY_LIMITS"));
             break;
+
         case plotter::FaultCode::HOMING_TIMEOUT:
             Serial.print(F("HOMING_TIMEOUT"));
             break;
+
         case plotter::FaultCode::MOVE_TIMEOUT:
             Serial.print(F("MOVE_TIMEOUT"));
             break;
+
         case plotter::FaultCode::ENCODER_NO_MOTION:
             Serial.print(F("ENCODER_NO_MOTION"));
             break;
+
         case plotter::FaultCode::POSITION_OUT_OF_RANGE:
             Serial.print(F("POSITION_OUT_OF_RANGE"));
             break;
+
         case plotter::FaultCode::INTERNAL_ERROR:
             Serial.print(F("INTERNAL_ERROR"));
             break;
@@ -379,18 +422,23 @@ void printRejectReason(plotter::RejectReason reason)
         case plotter::RejectReason::NONE:
             Serial.print(F("NONE"));
             break;
+
         case plotter::RejectReason::BUSY:
             Serial.print(F("BUSY"));
             break;
+
         case plotter::RejectReason::MACHINE_ZERO_UNKNOWN:
             Serial.print(F("MACHINE_ZERO_UNKNOWN"));
             break;
+
         case plotter::RejectReason::FAULT_ACTIVE:
             Serial.print(F("FAULT_ACTIVE"));
             break;
+
         case plotter::RejectReason::UNEXPECTED_EVENT:
             Serial.print(F("UNEXPECTED_EVENT"));
             break;
+
         case plotter::RejectReason::INVALID_MOTION_PARAMETERS:
             Serial.print(F("INVALID_MOTION_PARAMETERS"));
             break;
@@ -404,6 +452,7 @@ void printEncoderCounts()
 
     Serial.print(F("A="));
     Serial.print(counts.countA);
+
     Serial.print(F(" B="));
     Serial.print(counts.countB);
 }
@@ -412,10 +461,13 @@ void printSwitchStates()
 {
     Serial.print(F("LEFT="));
     printPressedState(leftLimitSwitch.isPressed());
+
     Serial.print(F(" RIGHT="));
     printPressedState(rightLimitSwitch.isPressed());
+
     Serial.print(F(" BOTTOM="));
     printPressedState(bottomLimitSwitch.isPressed());
+
     Serial.print(F(" TOP="));
     printPressedState(topLimitSwitch.isPressed());
 }
@@ -435,35 +487,46 @@ void printStatus()
 
     Serial.print(F(" | "));
     printSwitchStates();
+
     Serial.print(F(" | "));
     printEncoderCounts();
+
     Serial.print(F(" | motorA="));
     Serial.print(motorA.getOutput());
+
     Serial.print(F(" motorB="));
-    Serial.println(motorB.getOutput());
+    Serial.print(motorB.getOutput());
+
+    if (manualMotionSinceHoming)
+    {
+        Serial.print(F(" | REHOME_REQUIRED"));
+    }
+
+    Serial.println();
 }
 
 void printHelp()
 {
     Serial.println(F("Commands (send with CR or LF):"));
     Serial.println(F("  STATUS  - switches, encoders, motors and FSM"));
-    Serial.println(F("  A+ A-   - 150 ms low-PWM Motor A pulse"));
-    Serial.println(F("  B+ B-   - 150 ms low-PWM Motor B pulse"));
-    Serial.println(F("  X+ X-   - 150 ms Cartesian X pulse"));
-    Serial.println(F("  Y+ Y-   - 150 ms Cartesian Y pulse"));
+    Serial.println(F("  A+ A-   - 1000 ms FULL-PWM Motor A pulse"));
+    Serial.println(F("  B+ B-   - 1000 ms FULL-PWM Motor B pulse"));
+    Serial.println(F("  X+ X-   - 1000 ms FULL-PWM Cartesian X pulse"));
+    Serial.println(F("  Y+ Y-   - 1000 ms FULL-PWM Cartesian Y pulse"));
     Serial.println(F("  HOME/G28- initialise the system and start homing"));
     Serial.println(F("  P1..P4  - move to an interior test point"));
     Serial.println(F("  CENTER  - move to the measured travel centre"));
     Serial.println(F("  ROUTE   - run horizontal, vertical and diagonal lines"));
     Serial.println(F("  STOP    - stop and enter FAULT if system is active"));
     Serial.println(F("  RESET   - clear fault after all limits are released"));
-    Serial.println(F("Manual pulses are disabled after the first HOME."));
-    Serial.println(F("Move tests require successful homing and released limits."));
+    Serial.println(F("Manual pulses are allowed before HOME or while system is IDLE."));
+    Serial.println(F("Manual motion after HOME requires HOME again before closed-loop moves."));
 }
 
 // -----------------------------------------------------------------------------
 // Switch and manual-pulse handling
 // -----------------------------------------------------------------------------
+
 void updateAllLimitSwitches()
 {
     leftLimitSwitch.update();
@@ -482,41 +545,62 @@ bool anyLimitSwitchPressed()
 
 bool contradictoryLimitSwitchesPressed()
 {
-    return (leftLimitSwitch.isPressed() && rightLimitSwitch.isPressed()) ||
-           (bottomLimitSwitch.isPressed() && topLimitSwitch.isPressed());
+    return
+        (leftLimitSwitch.isPressed() && rightLimitSwitch.isPressed()) ||
+        (bottomLimitSwitch.isPressed() && topLimitSwitch.isPressed());
 }
 
 void stopManualPulse()
 {
     motorA.stop();
     motorB.stop();
+
     manualPulseActive = false;
 }
 
-void startManualPulse(int16_t motorACommand, int16_t motorBCommand)
+void startManualPulse(
+    int16_t motorACommand,
+    int16_t motorBCommand)
 {
-    if (systemStarted)
+    // Manual open-loop motion is permitted before HOME,
+    // or after system startup only while the FSM is IDLE.
+    if (systemStarted &&
+        plotterSystem.state() != plotter::PlotterState::IDLE)
     {
-        Serial.println(F("REJECTED: manual pulses require a board reset."));
+        Serial.println(
+            F("REJECTED: manual pulse requires IDLE state."));
         return;
     }
 
-    if (anyLimitSwitchPressed())
-    {
-        Serial.println(F("REJECTED: release all limit switches first."));
-        return;
-    }
+    // NOTE:
+    // Manual bring-up commands intentionally ignore limit switch states.
+    // This is for hardware direction/power testing only.
 
     stopManualPulse();
+
     motorA.setOutput(motorACommand);
     motorB.setOutput(motorBCommand);
+
     manualPulseStartMs = millis();
     manualPulseActive = true;
 
+    if (systemStarted &&
+        plotterSystem.machineZeroKnown())
+    {
+        manualMotionSinceHoming = true;
+    }
+
     Serial.print(F("PULSE motorA="));
     Serial.print(motorA.getOutput());
+
     Serial.print(F(" motorB="));
     Serial.println(motorB.getOutput());
+
+    if (manualMotionSinceHoming)
+    {
+        Serial.println(
+            F("WARNING: manual motion performed after HOME; run HOME again before closed-loop moves."));
+    }
 }
 
 int16_t commandForVelocitySign(float velocity)
@@ -534,7 +618,9 @@ int16_t commandForVelocitySign(float velocity)
     return 0;
 }
 
-void startCartesianPulse(int8_t xDirection, int8_t yDirection)
+void startCartesianPulse(
+    int8_t xDirection,
+    int8_t yDirection)
 {
     const Converter::MotorReference reference =
         converter.cartesianToMotorReference(
@@ -544,8 +630,10 @@ void startCartesianPulse(int8_t xDirection, int8_t yDirection)
             static_cast<float>(yDirection));
 
     startManualPulse(
-        commandForVelocitySign(reference.aVelocityCountsPerSecond),
-        commandForVelocitySign(reference.bVelocityCountsPerSecond));
+        commandForVelocitySign(
+            reference.aVelocityCountsPerSecond),
+        commandForVelocitySign(
+            reference.bVelocityCountsPerSecond));
 }
 
 void updateManualPulse()
@@ -555,17 +643,15 @@ void updateManualPulse()
         return;
     }
 
-    if (anyLimitSwitchPressed())
-    {
-        stopManualPulse();
-        Serial.println(F("PULSE STOPPED: a limit switch became active."));
-        printStatus();
-        return;
-    }
+    // NOTE:
+    // Manual bring-up pulses intentionally ignore limit switches.
+    // The pulse ends only when MANUAL_TEST_DURATION_MS expires.
 
-    if ((millis() - manualPulseStartMs) >= MANUAL_TEST_DURATION_MS)
+    if ((millis() - manualPulseStartMs) >=
+        MANUAL_TEST_DURATION_MS)
     {
         stopManualPulse();
+
         Serial.print(F("PULSE COMPLETE: "));
         printEncoderCounts();
         Serial.println();
@@ -583,6 +669,7 @@ void reportSwitchChange(
     }
 
     previousPressed = currentPressed;
+
     Serial.print(F("SWITCH "));
     Serial.print(name);
     Serial.print(F(" -> "));
@@ -592,15 +679,31 @@ void reportSwitchChange(
 
 void monitorSwitchChanges()
 {
-    reportSwitchChange(F("LEFT"), leftLimitSwitch.isPressed(), lastLeftPressed);
-    reportSwitchChange(F("RIGHT"), rightLimitSwitch.isPressed(), lastRightPressed);
-    reportSwitchChange(F("BOTTOM"), bottomLimitSwitch.isPressed(), lastBottomPressed);
-    reportSwitchChange(F("TOP"), topLimitSwitch.isPressed(), lastTopPressed);
+    reportSwitchChange(
+        F("LEFT"),
+        leftLimitSwitch.isPressed(),
+        lastLeftPressed);
+
+    reportSwitchChange(
+        F("RIGHT"),
+        rightLimitSwitch.isPressed(),
+        lastRightPressed);
+
+    reportSwitchChange(
+        F("BOTTOM"),
+        bottomLimitSwitch.isPressed(),
+        lastBottomPressed);
+
+    reportSwitchChange(
+        F("TOP"),
+        topLimitSwitch.isPressed(),
+        lastTopPressed);
 }
 
 // -----------------------------------------------------------------------------
 // Closed-loop Cartesian move tests
 // -----------------------------------------------------------------------------
+
 enum class MoveTestRequestResult : uint8_t
 {
     STARTED,
@@ -616,7 +719,9 @@ float absoluteValue(float value)
 Converter::CartesianDisplacement currentCartesianPosition()
 {
     const Encoder::CountPair counts =
-        Encoder::getCountPair(encoderA, encoderB);
+        Encoder::getCountPair(
+            encoderA,
+            encoderB);
 
     return converter.motorToCartesianDisplacement(
         static_cast<float>(counts.countA),
@@ -631,31 +736,47 @@ bool moveTestIsReady()
         return false;
     }
 
-    if (plotterSystem.state() != plotter::PlotterState::IDLE)
+    if (plotterSystem.state() !=
+        plotter::PlotterState::IDLE)
     {
-        Serial.println(F("REJECTED: system is not IDLE."));
+        Serial.println(
+            F("REJECTED: system is not IDLE."));
         return false;
     }
 
     if (!plotterSystem.machineZeroKnown())
     {
-        Serial.println(F("REJECTED: machine zero is unknown; run HOME."));
+        Serial.println(
+            F("REJECTED: machine zero is unknown; run HOME."));
+        return false;
+    }
+
+    if (manualMotionSinceHoming)
+    {
+        Serial.println(
+            F("REJECTED: manual motion occurred after HOME; run HOME again."));
         return false;
     }
 
     if (anyLimitSwitchPressed())
     {
-        Serial.println(F("REJECTED: release all limit switches first."));
+        Serial.println(
+            F("REJECTED: release all limit switches first."));
         return false;
     }
 
-    const HomingResult homingResult = homingController.result();
+    const HomingResult homingResult =
+        homingController.result();
 
-    if (!homingResult.xValid || !homingResult.yValid ||
-        homingResult.xTravelMm < MOVE_TEST_MINIMUM_TRAVEL_MM ||
-        homingResult.yTravelMm < MOVE_TEST_MINIMUM_TRAVEL_MM)
+    if (!homingResult.xValid ||
+        !homingResult.yValid ||
+        homingResult.xTravelMm <
+            MOVE_TEST_MINIMUM_TRAVEL_MM ||
+        homingResult.yTravelMm <
+            MOVE_TEST_MINIMUM_TRAVEL_MM)
     {
-        Serial.println(F("REJECTED: measured X/Y travel is invalid."));
+        Serial.println(
+            F("REJECTED: measured X/Y travel is invalid."));
         return false;
     }
 
@@ -670,21 +791,34 @@ MoveTestRequestResult requestMoveToTestPoint(
         return MoveTestRequestResult::REJECTED;
     }
 
-    const HomingResult homingResult = homingController.result();
+    const HomingResult homingResult =
+        homingController.result();
+
     const Converter::CartesianDisplacement current =
         currentCartesianPosition();
 
-    const float targetXMm = homingResult.xTravelMm * point.xFraction;
-    const float targetYMm = homingResult.yTravelMm * point.yFraction;
-    const float deltaXMm = targetXMm - current.xMm;
-    const float deltaYMm = targetYMm - current.yMm;
+    const float targetXMm =
+        homingResult.xTravelMm * point.xFraction;
 
-    if (absoluteValue(deltaXMm) <= MOVE_TEST_POSITION_EPSILON_MM &&
-        absoluteValue(deltaYMm) <= MOVE_TEST_POSITION_EPSILON_MM)
+    const float targetYMm =
+        homingResult.yTravelMm * point.yFraction;
+
+    const float deltaXMm =
+        targetXMm - current.xMm;
+
+    const float deltaYMm =
+        targetYMm - current.yMm;
+
+    if (absoluteValue(deltaXMm) <=
+            MOVE_TEST_POSITION_EPSILON_MM &&
+        absoluteValue(deltaYMm) <=
+            MOVE_TEST_POSITION_EPSILON_MM)
     {
         Serial.print(F("MOVE "));
         Serial.print(point.name);
-        Serial.println(F(" skipped: already at target."));
+        Serial.println(
+            F(" skipped: already at target."));
+
         return MoveTestRequestResult::ALREADY_AT_TARGET;
     }
 
@@ -699,31 +833,42 @@ MoveTestRequestResult requestMoveToTestPoint(
     {
         Serial.print(F("MOVE "));
         Serial.print(point.name);
+
         Serial.print(F(" rejected: "));
         printRejectReason(request.rejectReason);
+
         Serial.println();
+
         return MoveTestRequestResult::REJECTED;
     }
 
     activeMoveTargetXMm = targetXMm;
     activeMoveTargetYMm = targetYMm;
     activeMoveTargetValid = true;
+
     lastMoveTelemetryMs = millis();
 
     Serial.print(F("MOVE "));
     Serial.print(point.name);
+
     Serial.print(F(" accepted: current=("));
     Serial.print(current.xMm, 2);
+
     Serial.print(F(", "));
     Serial.print(current.yMm, 2);
+
     Serial.print(F(") target=("));
     Serial.print(targetXMm, 2);
+
     Serial.print(F(", "));
     Serial.print(targetYMm, 2);
+
     Serial.print(F(") delta=("));
     Serial.print(deltaXMm, 2);
+
     Serial.print(F(", "));
     Serial.print(deltaYMm, 2);
+
     Serial.println(F(") mm"));
 
     return MoveTestRequestResult::STARTED;
@@ -732,25 +877,32 @@ MoveTestRequestResult requestMoveToTestPoint(
 void requestNextRoutePoint()
 {
     while (moveTestRouteActive &&
-           nextMoveTestRoutePoint < MOVE_TEST_ROUTE_POINT_COUNT)
+           nextMoveTestRoutePoint <
+               MOVE_TEST_ROUTE_POINT_COUNT)
     {
         const FractionalTestPoint& point =
-            MOVE_TEST_ROUTE[nextMoveTestRoutePoint];
+            MOVE_TEST_ROUTE[
+                nextMoveTestRoutePoint];
 
         ++nextMoveTestRoutePoint;
 
         const MoveTestRequestResult result =
             requestMoveToTestPoint(point);
 
-        if (result == MoveTestRequestResult::STARTED)
+        if (result ==
+            MoveTestRequestResult::STARTED)
         {
             return;
         }
 
-        if (result == MoveTestRequestResult::REJECTED)
+        if (result ==
+            MoveTestRequestResult::REJECTED)
         {
             moveTestRouteActive = false;
-            Serial.println(F("ROUTE cancelled."));
+
+            Serial.println(
+                F("ROUTE cancelled."));
+
             return;
         }
     }
@@ -758,14 +910,18 @@ void requestNextRoutePoint()
     if (moveTestRouteActive)
     {
         moveTestRouteActive = false;
-        Serial.println(F("ROUTE COMPLETE."));
+
+        Serial.println(
+            F("ROUTE COMPLETE."));
     }
 }
 
-void startSingleMoveTest(const FractionalTestPoint& point)
+void startSingleMoveTest(
+    const FractionalTestPoint& point)
 {
     moveTestRouteActive = false;
     nextMoveTestRoutePoint = 0U;
+
     requestMoveToTestPoint(point);
 }
 
@@ -778,67 +934,111 @@ void startMoveTestRoute()
 
     moveTestRouteActive = true;
     nextMoveTestRoutePoint = 0U;
-    Serial.println(F("ROUTE started; STOP/M112 cancels and enters FAULT."));
+
+    Serial.println(
+        F("ROUTE started; STOP/M112 cancels and enters FAULT."));
+
     requestNextRoutePoint();
 }
 
 void monitorMoveTelemetry()
 {
     if (!systemStarted ||
-        plotterSystem.state() != plotter::PlotterState::MOVING ||
+        plotterSystem.state() !=
+            plotter::PlotterState::MOVING ||
         !activeMoveTargetValid)
     {
         return;
     }
 
-    const unsigned long currentTimeMs = millis();
+    const unsigned long currentTimeMs =
+        millis();
 
-    if ((currentTimeMs - lastMoveTelemetryMs) <
+    if ((currentTimeMs -
+         lastMoveTelemetryMs) <
         MOVE_TELEMETRY_INTERVAL_MS)
     {
         return;
     }
 
-    lastMoveTelemetryMs = currentTimeMs;
+    lastMoveTelemetryMs =
+        currentTimeMs;
 
     const Converter::CartesianDisplacement current =
         currentCartesianPosition();
+
     const XYCoordinatorTelemetry telemetry =
         xyCoordinator.getTelemetry();
 
     Serial.print(F("MOVE x="));
     Serial.print(current.xMm, 2);
+
     Serial.print(F("/"));
     Serial.print(activeMoveTargetXMm, 2);
+
     Serial.print(F(" y="));
     Serial.print(current.yMm, 2);
+
     Serial.print(F("/"));
     Serial.print(activeMoveTargetYMm, 2);
+
     Serial.print(F(" | errA="));
-    Serial.print(telemetry.motorA.trackingError, 1);
+    Serial.print(
+        telemetry.motorA.trackingError,
+        1);
+
     Serial.print(F(" errB="));
-    Serial.print(telemetry.motorB.trackingError, 1);
+    Serial.print(
+        telemetry.motorB.trackingError,
+        1);
+
     Serial.print(F(" outA="));
-    Serial.print(telemetry.motorA.motorOutput);
+    Serial.print(
+        telemetry.motorA.motorOutput);
+
     Serial.print(F(" outB="));
-    Serial.println(telemetry.motorB.motorOutput);
+    Serial.println(
+        telemetry.motorB.motorOutput);
 }
 
 // -----------------------------------------------------------------------------
 // System monitoring and command handling
 // -----------------------------------------------------------------------------
+
 void printHomingResult()
 {
-    const HomingResult result = homingController.result();
+    const HomingResult result =
+        homingController.result();
 
-    Serial.print(F("HOMING RESULT xTravelMm="));
-    Serial.print(result.xTravelMm, 3);
-    Serial.print(F(" yTravelMm="));
-    Serial.print(result.yTravelMm, 3);
-    Serial.print(F(" xValid="));
-    Serial.print(result.xValid ? F("yes") : F("no"));
-    Serial.print(F(" yValid="));
-    Serial.println(result.yValid ? F("yes") : F("no"));
+    Serial.print(
+        F("HOMING RESULT xTravelMm="));
+
+    Serial.print(
+        result.xTravelMm,
+        3);
+
+    Serial.print(
+        F(" yTravelMm="));
+
+    Serial.print(
+        result.yTravelMm,
+        3);
+
+    Serial.print(
+        F(" xValid="));
+
+    Serial.print(
+        result.xValid
+            ? F("yes")
+            : F("no"));
+
+    Serial.print(
+        F(" yValid="));
+
+    Serial.println(
+        result.yValid
+            ? F("yes")
+            : F("no"));
 }
 
 void monitorSystemChanges()
@@ -848,46 +1048,73 @@ void monitorSystemChanges()
         return;
     }
 
-    const plotter::PlotterState currentState = plotterSystem.state();
+    const plotter::PlotterState currentState =
+        plotterSystem.state();
 
     if (currentState != lastPlotterState)
     {
-        const plotter::PlotterState previousState = lastPlotterState;
-        lastPlotterState = currentState;
+        const plotter::PlotterState previousState =
+            lastPlotterState;
+
+        lastPlotterState =
+            currentState;
+
         Serial.print(F("FSM -> "));
         printPlotterState(currentState);
 
-        if (currentState == plotter::PlotterState::FAULT)
+        if (currentState ==
+            plotter::PlotterState::FAULT)
         {
             moveTestRouteActive = false;
             activeMoveTargetValid = false;
 
             Serial.print(F(" code="));
-            printFaultCode(plotterSystem.activeFault());
+
+            printFaultCode(
+                plotterSystem.activeFault());
         }
 
         Serial.println();
 
-        if (currentState == plotter::PlotterState::IDLE &&
-            previousState == plotter::PlotterState::HOMING &&
+        if (currentState ==
+                plotter::PlotterState::IDLE &&
+            previousState ==
+                plotter::PlotterState::HOMING &&
             plotterSystem.machineZeroKnown())
         {
             moveTestRouteActive = false;
             activeMoveTargetValid = false;
+
+            // A successful HOME restores a valid
+            // coordinate reference after any manual motion.
+            manualMotionSinceHoming = false;
+
             printHomingResult();
         }
 
-        if (currentState == plotter::PlotterState::IDLE &&
-            previousState == plotter::PlotterState::MOVING)
+        if (currentState ==
+                plotter::PlotterState::IDLE &&
+            previousState ==
+                plotter::PlotterState::MOVING)
         {
             const Converter::CartesianDisplacement current =
                 currentCartesianPosition();
 
-            Serial.print(F("MOVE COMPLETE: actual=("));
-            Serial.print(current.xMm, 2);
+            Serial.print(
+                F("MOVE COMPLETE: actual=("));
+
+            Serial.print(
+                current.xMm,
+                2);
+
             Serial.print(F(", "));
-            Serial.print(current.yMm, 2);
-            Serial.println(F(") mm"));
+
+            Serial.print(
+                current.yMm,
+                2);
+
+            Serial.println(
+                F(") mm"));
 
             activeMoveTargetValid = false;
 
@@ -898,21 +1125,35 @@ void monitorSystemChanges()
         }
     }
 
-    const HomingStage currentStage = homingController.stage();
-    const HomingPhase currentPhase = homingController.phase();
+    const HomingStage currentStage =
+        homingController.stage();
+
+    const HomingPhase currentPhase =
+        homingController.phase();
 
     if (currentStage != lastHomingStage ||
         currentPhase != lastHomingPhase)
     {
-        lastHomingStage = currentStage;
-        lastHomingPhase = currentPhase;
+        lastHomingStage =
+            currentStage;
 
-        Serial.print(F("HOMING stage="));
+        lastHomingPhase =
+            currentPhase;
+
+        Serial.print(
+            F("HOMING stage="));
+
         printHomingStage(currentStage);
-        Serial.print(F(" phase="));
+
+        Serial.print(
+            F(" phase="));
+
         printHomingPhase(currentPhase);
+
         Serial.print(F(" | "));
+
         printEncoderCounts();
+
         Serial.println();
     }
 }
@@ -920,33 +1161,41 @@ void monitorSystemChanges()
 void startOrRequestHoming()
 {
     stopManualPulse();
+
     moveTestRouteActive = false;
     activeMoveTargetValid = false;
 
     if (contradictoryLimitSwitchesPressed())
     {
-        Serial.println(F("REJECTED: contradictory X or Y limit inputs."));
+        Serial.println(
+            F("REJECTED: contradictory X or Y limit inputs."));
         return;
     }
 
     if (!systemStarted)
     {
-        // PlotterSystem::begin() initialises XYCoordinator, both axes,
-        // HomingController and the FSM, then starts the configured startup
-        // homing sequence. Limit-switch begin()/ISR wiring has already run.
         plotterSystem.begin();
+
         systemStarted = true;
 
-        lastPlotterState = plotter::PlotterState::IDLE;
-        lastHomingStage = HomingStage::IDLE;
-        lastHomingPhase = HomingPhase::IDLE;
+        lastPlotterState =
+            plotter::PlotterState::IDLE;
 
-        Serial.println(F("System initialised; startup homing requested."));
+        lastHomingStage =
+            HomingStage::IDLE;
+
+        lastHomingPhase =
+            HomingPhase::IDLE;
+
+        Serial.println(
+            F("System initialised; startup homing requested."));
+
         monitorSystemChanges();
         return;
     }
 
-    const plotter::FSMResult result = plotterSystem.requestHoming();
+    const plotter::FSMResult result =
+        plotterSystem.requestHoming();
 
     Serial.println(
         result.accepted
@@ -957,6 +1206,7 @@ void startOrRequestHoming()
 void emergencyStop()
 {
     stopManualPulse();
+
     moveTestRouteActive = false;
     activeMoveTargetValid = false;
 
@@ -966,15 +1216,21 @@ void emergencyStop()
         return;
     }
 
-    if (plotterSystem.state() == plotter::PlotterState::HOMING ||
-        plotterSystem.state() == plotter::PlotterState::MOVING)
+    if (plotterSystem.state() ==
+            plotter::PlotterState::HOMING ||
+        plotterSystem.state() ==
+            plotter::PlotterState::MOVING)
     {
-        plotterSystem.reportFault(plotter::FaultCode::INTERNAL_ERROR);
-        Serial.println(F("STOP accepted; system entered FAULT."));
+        plotterSystem.reportFault(
+            plotter::FaultCode::INTERNAL_ERROR);
+
+        Serial.println(
+            F("STOP accepted; system entered FAULT."));
     }
     else
     {
-        Serial.println(F("System already stopped."));
+        Serial.println(
+            F("System already stopped."));
     }
 }
 
@@ -982,24 +1238,32 @@ void resetSystemFault()
 {
     if (!systemStarted)
     {
-        Serial.println(F("REJECTED: system has not been started."));
+        Serial.println(
+            F("REJECTED: system has not been started."));
         return;
     }
 
-    // The FSM deliberately preserves a valid machine zero across a normal
-    // move fault.  Limit inputs must nevertheless be released before the
-    // external reset policy allows the FAULT latch to be cleared.
     if (anyLimitSwitchPressed())
     {
-        Serial.println(F("REJECTED: release all limit switches before RESET."));
+        Serial.println(
+            F("REJECTED: release all limit switches before RESET."));
         return;
     }
 
-    const plotter::FSMResult result = plotterSystem.resetFault();
+    const plotter::FSMResult result =
+        plotterSystem.resetFault();
 
     if (!result.accepted)
     {
-        Serial.println(F("Fault reset rejected by FSM."));
+        Serial.println(
+            F("Fault reset rejected by FSM."));
+        return;
+    }
+
+    if (manualMotionSinceHoming)
+    {
+        Serial.println(
+            F("Fault reset accepted. Manual motion invalidated the previous position; run HOME."));
         return;
     }
 
@@ -1017,7 +1281,8 @@ void resetSystemFault()
 
 void executeCommand(const char* command)
 {
-    if (strcmp(command, "HELP") == 0 || strcmp(command, "?") == 0)
+    if (strcmp(command, "HELP") == 0 ||
+        strcmp(command, "?") == 0)
     {
         printHelp();
     }
@@ -1027,85 +1292,115 @@ void executeCommand(const char* command)
     }
     else if (strcmp(command, "A+") == 0)
     {
-        startManualPulse(MANUAL_TEST_PWM, 0);
+        startManualPulse(
+            MANUAL_TEST_PWM,
+            0);
     }
     else if (strcmp(command, "A-") == 0)
     {
-        startManualPulse(-static_cast<int16_t>(MANUAL_TEST_PWM), 0);
+        startManualPulse(
+            -static_cast<int16_t>(
+                MANUAL_TEST_PWM),
+            0);
     }
     else if (strcmp(command, "B+") == 0)
     {
-        startManualPulse(0, MANUAL_TEST_PWM);
+        startManualPulse(
+            0,
+            MANUAL_TEST_PWM);
     }
     else if (strcmp(command, "B-") == 0)
     {
-        startManualPulse(0, -static_cast<int16_t>(MANUAL_TEST_PWM));
+        startManualPulse(
+            0,
+            -static_cast<int16_t>(
+                MANUAL_TEST_PWM));
     }
     else if (strcmp(command, "X+") == 0)
     {
-        startCartesianPulse(1, 0);
+        startCartesianPulse(
+            1,
+            0);
     }
     else if (strcmp(command, "X-") == 0)
     {
-        startCartesianPulse(-1, 0);
+        startCartesianPulse(
+            -1,
+            0);
     }
     else if (strcmp(command, "Y+") == 0)
     {
-        startCartesianPulse(0, 1);
+        startCartesianPulse(
+            0,
+            1);
     }
     else if (strcmp(command, "Y-") == 0)
     {
-        startCartesianPulse(0, -1);
+        startCartesianPulse(
+            0,
+            -1);
     }
-    else if (strcmp(command, "HOME") == 0 || strcmp(command, "G28") == 0)
+    else if (strcmp(command, "HOME") == 0 ||
+             strcmp(command, "G28") == 0)
     {
         startOrRequestHoming();
     }
     else if (strcmp(command, "P1") == 0)
     {
-        startSingleMoveTest(TEST_POINT_1);
+        startSingleMoveTest(
+            TEST_POINT_1);
     }
     else if (strcmp(command, "P2") == 0)
     {
-        startSingleMoveTest(TEST_POINT_2);
+        startSingleMoveTest(
+            TEST_POINT_2);
     }
     else if (strcmp(command, "P3") == 0)
     {
-        startSingleMoveTest(TEST_POINT_3);
+        startSingleMoveTest(
+            TEST_POINT_3);
     }
     else if (strcmp(command, "P4") == 0)
     {
-        startSingleMoveTest(TEST_POINT_4);
+        startSingleMoveTest(
+            TEST_POINT_4);
     }
     else if (strcmp(command, "CENTER") == 0 ||
              strcmp(command, "CENTRE") == 0)
     {
-        startSingleMoveTest(TEST_POINT_CENTRE);
+        startSingleMoveTest(
+            TEST_POINT_CENTRE);
     }
     else if (strcmp(command, "ROUTE") == 0)
     {
         startMoveTestRoute();
     }
-    else if (strcmp(command, "STOP") == 0 || strcmp(command, "M112") == 0)
+    else if (strcmp(command, "STOP") == 0 ||
+             strcmp(command, "M112") == 0)
     {
         emergencyStop();
     }
-    else if (strcmp(command, "RESET") == 0 || strcmp(command, "M999") == 0)
+    else if (strcmp(command, "RESET") == 0 ||
+             strcmp(command, "M999") == 0)
     {
         resetSystemFault();
     }
     else
     {
-        Serial.print(F("Unknown command: "));
+        Serial.print(
+            F("Unknown command: "));
+
         Serial.println(command);
     }
 }
 
 char toUpperAscii(char value)
 {
-    if (value >= 'a' && value <= 'z')
+    if (value >= 'a' &&
+        value <= 'z')
     {
-        return static_cast<char>(value - 'a' + 'A');
+        return static_cast<char>(
+            value - 'a' + 'A');
     }
 
     return value;
@@ -1115,84 +1410,174 @@ void pollSerialCommands()
 {
     while (Serial.available() > 0)
     {
-        const char received = static_cast<char>(Serial.read());
+        const char received =
+            static_cast<char>(
+                Serial.read());
 
-        if (received == '\r' || received == '\n')
+        if (received == '\r' ||
+            received == '\n')
         {
             if (commandLength > 0U)
             {
-                commandBuffer[commandLength] = '\0';
-                executeCommand(commandBuffer);
+                commandBuffer[
+                    commandLength] = '\0';
+
+                executeCommand(
+                    commandBuffer);
+
                 commandLength = 0U;
             }
 
             continue;
         }
 
-        if (received == ' ' || received == '\t')
+        if (received == ' ' ||
+            received == '\t')
         {
             continue;
         }
 
-        if (commandLength < COMMAND_BUFFER_SIZE - 1U)
+        if (commandLength <
+            COMMAND_BUFFER_SIZE - 1U)
         {
-            commandBuffer[commandLength] = toUpperAscii(received);
+            commandBuffer[
+                commandLength] =
+                    toUpperAscii(
+                        received);
+
             ++commandLength;
         }
         else
         {
             commandLength = 0U;
-            Serial.println(F("Command too long; buffer cleared."));
+
+            Serial.println(
+                F("Command too long; buffer cleared."));
         }
     }
 }
+
 }  // namespace
 
-// Encoder A uses D68/A14 = PCINT22, which belongs to PCINT2_vect.
+// -----------------------------------------------------------------------------
+// Encoder pin-change interrupts
+// -----------------------------------------------------------------------------
+
+// Encoder A:
+// D68 / A14 = PCINT22 = PCINT2_vect
 ISR(PCINT2_vect)
 {
     encoderA.update();
 }
 
-// Encoder B uses D52 = PCINT1, which belongs to PCINT0_vect.
+// Encoder B:
+// D52 = PCINT1 = PCINT0_vect
 ISR(PCINT0_vect)
 {
     encoderB.update();
 }
 
+// -----------------------------------------------------------------------------
+// Arduino setup / loop
+// -----------------------------------------------------------------------------
+
 void setup()
 {
-    Serial.begin(SystemConfig::SERIAL_BAUD_RATE);
+    Serial.begin(
+        SystemConfig::SERIAL_BAUD_RATE);
 
-    // Motor initialisation is required for the pre-homing pulse tests.
-    // PlotterSystem::begin() safely initialises the same drivers again later.
+    // Required for pre-homing manual motor tests.
     motorA.begin();
     motorB.begin();
-    Encoder::zeroCountPair(encoderA, encoderB);
 
-    // Each active-high switch uses its own rising-edge external interrupt.
-    leftLimitSwitch.begin(onLeftLimitSwitchInterrupt);
-    rightLimitSwitch.begin(onRightLimitSwitchInterrupt);
-    bottomLimitSwitch.begin(onBottomLimitSwitchInterrupt);
-    topLimitSwitch.begin(onTopLimitSwitchInterrupt);
+    Encoder::zeroCountPair(
+        encoderA,
+        encoderB);
 
-    lastLeftPressed = leftLimitSwitch.isPressed();
-    lastRightPressed = rightLimitSwitch.isPressed();
-    lastBottomPressed = bottomLimitSwitch.isPressed();
-    lastTopPressed = topLimitSwitch.isPressed();
+    // Active-high limit switches.
+    leftLimitSwitch.begin(
+        onLeftLimitSwitchInterrupt);
+
+    rightLimitSwitch.begin(
+        onRightLimitSwitchInterrupt);
+
+    bottomLimitSwitch.begin(
+        onBottomLimitSwitchInterrupt);
+
+    topLimitSwitch.begin(
+        onTopLimitSwitchInterrupt);
+
+    lastLeftPressed =
+        leftLimitSwitch.isPressed();
+
+    lastRightPressed =
+        rightLimitSwitch.isPressed();
+
+    lastBottomPressed =
+        bottomLimitSwitch.isPressed();
+
+    lastTopPressed =
+        topLimitSwitch.isPressed();
 
     Serial.println();
-    Serial.println(F("ME306 plotter hardware bring-up console"));
-    Serial.println(F("Active-high limits; automatic homing is DISARMED."));
-    Serial.print(F("Temporary motor command limit: "));
-    Serial.println(BRINGUP_MOTOR_OUTPUT_LIMIT);
+    Serial.println(
+        F("ME306 plotter HIGH-POWER hardware bring-up console"));
+
+    Serial.println(
+        F("Active-high limits; automatic homing is DISARMED until HOME/G28."));
+
+    Serial.print(
+        F("Motor command limit: "));
+
+    Serial.println(
+        BRINGUP_MOTOR_OUTPUT_LIMIT);
+
+    Serial.print(
+        F("Manual test PWM: "));
+
+    Serial.println(
+        MANUAL_TEST_PWM);
+
+    Serial.print(
+        F("Manual pulse duration ms: "));
+
+    Serial.println(
+        MANUAL_TEST_DURATION_MS);
+
+    Serial.print(
+        F("Closed-loop output range: "));
+
+    Serial.print(
+        CONTROLLER_MINIMUM_OUTPUT,
+        0);
+
+    Serial.print(F(" to "));
+
+    Serial.println(
+        CONTROLLER_MAXIMUM_OUTPUT,
+        0);
+
+    Serial.print(
+        F("Initial Kp: "));
+
+    Serial.println(
+        INITIAL_PROPORTIONAL_GAIN,
+        2);
+
     printHelp();
     printStatus();
 
     if (anyLimitSwitchPressed())
     {
-        Serial.println(F("WARNING: one or more switches are active at startup."));
+        Serial.println(
+            F("WARNING: one or more switches are active at startup."));
     }
+
+    Serial.print(F("PCMSK2 = 0x"));
+    Serial.println(PCMSK2, HEX);
+
+    Serial.print(F("PCMSK0 = 0x"));
+    Serial.println(PCMSK0, HEX);
 }
 
 void loop()
@@ -1202,27 +1587,35 @@ void loop()
     if (!systemStarted)
     {
         updateAllLimitSwitches();
-        updateManualPulse();
     }
     else
     {
-        // HomingController owns switch updates during HOMING. Outside homing,
-        // main keeps debouncing alive and supplies the basic unexpected-limit
-        // safety path required during a normal move.
-        if (plotterSystem.state() != plotter::PlotterState::HOMING)
+        // HomingController owns switch updates while HOMING.
+        //
+        // At IDLE/MOVING, main keeps switch debouncing alive.
+        if (plotterSystem.state() !=
+            plotter::PlotterState::HOMING)
         {
             updateAllLimitSwitches();
 
-            if (plotterSystem.state() == plotter::PlotterState::MOVING &&
+            if (plotterSystem.state() ==
+                    plotter::PlotterState::MOVING &&
                 anyLimitSwitchPressed())
             {
                 plotterSystem.reportFault(
-                    plotter::FaultCode::UNEXPECTED_LIMIT);
+                    plotter::FaultCode::
+                        UNEXPECTED_LIMIT);
             }
         }
 
         plotterSystem.update();
     }
+
+    // IMPORTANT:
+    // Manual pulses can now be used before HOME or while the
+    // started system is IDLE, so this must run regardless of
+    // systemStarted.
+    updateManualPulse();
 
     monitorSwitchChanges();
     monitorMoveTelemetry();
