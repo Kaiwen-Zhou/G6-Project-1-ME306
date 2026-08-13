@@ -16,18 +16,36 @@ Converter::cartesianToMotorReference(
     float xDisplacementMm,
     float yDisplacementMm,
     float xVelocityMmPerSecond,
-    float yVelocityMmPerSecond) const {
-    const float aDisplacementMm = xDisplacementMm + yDisplacementMm;
+    float yVelocityMmPerSecond) const
+{
+    // Physical X and Y axes are swapped relative to the original
+    // software Cartesian convention.
+    //
+    // Original:
+    // A = X + Y
+    // B = X - Y
+    //
+    // After swapping physical X/Y:
+    // A = Y + X
+    // B = Y - X
 
-    const float bDisplacementMm = xDisplacementMm - yDisplacementMm;
+    const float aDisplacementMm =
+        -yDisplacementMm + xDisplacementMm;
 
-    const float aVelocityMmPerSecond = xVelocityMmPerSecond + yVelocityMmPerSecond;
+    const float bDisplacementMm =
+        -yDisplacementMm - xDisplacementMm;
 
-    const float bVelocityMmPerSecond = xVelocityMmPerSecond - yVelocityMmPerSecond;
+    const float aVelocityMmPerSecond =
+        -yVelocityMmPerSecond + xVelocityMmPerSecond;
 
-    const float signedAMmPerCount = motorAMmPerCount_ * motorACoordinateSign_;
+    const float bVelocityMmPerSecond =
+        -yVelocityMmPerSecond - xVelocityMmPerSecond;
 
-    const float signedBMmPerCount = motorBMmPerCount_ * motorBCoordinateSign_;
+    const float signedAMmPerCount =
+        motorAMmPerCount_ * motorACoordinateSign_;
+
+    const float signedBMmPerCount =
+        motorBMmPerCount_ * motorBCoordinateSign_;
 
     return {
         aDisplacementMm / signedAMmPerCount,
@@ -40,15 +58,33 @@ Converter::cartesianToMotorReference(
 Converter::CartesianDisplacement
 Converter::motorToCartesianDisplacement(
     float aDisplacementCounts,
-    float bDisplacementCounts) const {
+    float bDisplacementCounts) const
+{
     const float aDisplacementMm =
-        aDisplacementCounts * motorAMmPerCount_ * motorACoordinateSign_;
+        aDisplacementCounts *
+        motorAMmPerCount_ *
+        motorACoordinateSign_;
 
     const float bDisplacementMm =
-        bDisplacementCounts * motorBMmPerCount_ * motorBCoordinateSign_;
+        bDisplacementCounts *
+        motorBMmPerCount_ *
+        motorBCoordinateSign_;
+
+    // Original physical reconstruction:
+    //
+    // physicalX = (A + B) / 2
+    // physicalY = (A - B) / 2
+    //
+    // Software X/Y are swapped relative to the physical axes.
+
+    const float physicalXDisplacementMm =
+        0.5f * (aDisplacementMm + bDisplacementMm);
+
+    const float physicalYDisplacementMm =
+        0.5f * (aDisplacementMm - bDisplacementMm);
 
     return {
-        0.5f * (aDisplacementMm + bDisplacementMm),
-        0.5f * (aDisplacementMm - bDisplacementMm)
+        physicalYDisplacementMm,  // software X
+        -physicalXDisplacementMm   // software Y
     };
 }
