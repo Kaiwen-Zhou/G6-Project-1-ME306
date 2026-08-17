@@ -44,8 +44,8 @@ constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 0.0f; // TODO: measured X min-to-max travel
-constexpr float MACHINE_Y_TRAVEL_MM = 0.0f; // TODO: measured Y min-to-max travel
+constexpr float MACHINE_X_TRAVEL_MM = 250.0f; ////////////// TODO: measured X min-to-max travel
+constexpr float MACHINE_Y_TRAVEL_MM = 250.0f; ////////////// TODO: measured Y min-to-max travel
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
@@ -58,12 +58,12 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 
 // Initial origin-homing values. These PWM values and distances must be tuned
 // on the real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 255;
-constexpr uint8_t HOMING_BACKOFF_PWM = 200;
-constexpr uint8_t HOMING_FINE_APPROACH_PWM = 150;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 150;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 125;
+constexpr uint8_t HOMING_BACKOFF_PWM = 100;
+constexpr uint8_t HOMING_FINE_APPROACH_PWM = 50;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 30;
 
-constexpr float HOMING_BACKOFF_DISTANCE_MM = 2.0f;
+constexpr float HOMING_BACKOFF_DISTANCE_MM = 10.0f;
 
 constexpr unsigned long HOMING_CONTACT_PAUSE_MS = 250UL;
 constexpr unsigned long HOMING_FINE_CONTACT_PAUSE_MS = 250UL;
