@@ -4,34 +4,34 @@
 #include <Arduino.h>
 
 class Encoder {
-  public:
-    struct CountPair {
-      int32_t countA;
-      int32_t countB;
-    };
+    public:
+        struct CountPair {
+                int32_t countA;
+                int32_t countB;
+        };
 
-    Encoder(bool isEncoderA);
+        Encoder(bool isEncoderA);
 
-    // Called from the relevant pin-change ISR
-    void update();
+        // Called from the relevant pin-change ISR
+        void update();
 
-    void zeroCount();
-    
-    int32_t getCount();
+        void zeroCount();
 
-    static void zeroCountPair(Encoder& encoderA, Encoder& encoderB);
+        int32_t getCount();
 
-    // Read both 32-bit counts within one atomic block.
-    static CountPair getCountPair(const Encoder& encoderA, const Encoder& encoderB);
+        static void zeroCountPair(Encoder& encoderA, Encoder& encoderB);
 
-    bool getDirection() const;
+        // Read both 32-bit counts within one atomic block.
+        static CountPair getCountPair(const Encoder& encoderA, const Encoder& encoderB);
 
-  private:
-    int pinA_;
-    int pinB_;
+        bool getDirection() const;
 
-    volatile int32_t count_ = 0;
-    volatile bool direction_ = true;   // True = clockwise
+    private:
+        int pinA_;
+        int pinB_;
+
+        volatile int32_t count_ = 0;
+        volatile bool direction_ = true; // True = clockwise
 };
 
 #endif // ENCODER_H

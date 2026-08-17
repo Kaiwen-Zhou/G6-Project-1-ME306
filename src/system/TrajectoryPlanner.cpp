@@ -2,41 +2,30 @@
 
 #include <math.h>
 
-namespace plotter
-{
+namespace plotter {
 
-namespace
-{
+namespace {
 constexpr float SECONDS_PER_MINUTE = 60.0f;
 }
 
 TrajectoryPlanner::TrajectoryPlanner()
-    : targetXDisplacementMm_(0.0f),
-      targetYDisplacementMm_(0.0f),
-      directionX_(0.0f),
-      directionY_(0.0f),
-      pathLengthMm_(0.0f),
-      accelerationMmPerSecondSquared_(0.0f),
+    : targetXDisplacementMm_(0.0f), targetYDisplacementMm_(0.0f), 
+      directionX_(0.0f), directionY_(0.0f),
+      pathLengthMm_(0.0f), 
+      accelerationMmPerSecondSquared_(0.0f), 
       peakVelocityMmPerSecond_(0.0f),
-      accelerationTimeSeconds_(0.0f),
-      cruiseTimeSeconds_(0.0f),
-      totalTimeSeconds_(0.0f),
+      accelerationTimeSeconds_(0.0f), 
+      cruiseTimeSeconds_(0.0f), totalTimeSeconds_(0.0f), 
       accelerationDistanceMm_(0.0f),
-      cruiseDistanceMm_(0.0f),
-      elapsedTimeSeconds_(0.0f),
-      reference_{0.0f, 0.0f, 0.0f, 0.0f, false},
+      cruiseDistanceMm_(0.0f), 
+      elapsedTimeSeconds_(0.0f), 
+      reference_{0.0f, 0.0f, 0.0f, 0.0f, false}, 
       active_(false),
-      complete_(false)
-{
+      complete_(false) {
 }
 
-bool TrajectoryPlanner::startMove(
-    float startXMm,
-    float startYMm,
-    float targetXMm,
-    float targetYMm,
-    float feedrateMmPerMinute,
-    float maxAccelerationMmPerSecondSquared) {
+bool TrajectoryPlanner::startMove(float startXMm, float startYMm, float targetXMm, float targetYMm,
+                                  float feedrateMmPerMinute, float maxAccelerationMmPerSecondSquared) {
     if (feedrateMmPerMinute <= 0.0f || maxAccelerationMmPerSecondSquared <= 0.0f) {
         active_ = false;
         complete_ = false;
@@ -53,9 +42,7 @@ bool TrajectoryPlanner::startMove(
     targetYDisplacementMm_ = targetYMm - startYMm;
 
     pathLengthMm_ =
-        sqrtf(
-            targetXDisplacementMm_ * targetXDisplacementMm_ +
-            targetYDisplacementMm_ * targetYDisplacementMm_);
+        sqrtf(targetXDisplacementMm_ * targetXDisplacementMm_ + targetYDisplacementMm_ * targetYDisplacementMm_);
 
     elapsedTimeSeconds_ = 0.0f;
 
@@ -84,8 +71,7 @@ bool TrajectoryPlanner::startMove(
 
     // Distance required to accelerate from zero to the requested velocity.
     const float requestedAccelerationDistanceMm =
-        (requestedVelocityMmPerSecond * requestedVelocityMmPerSecond) /
-        (2.0f * accelerationMmPerSecondSquared_);
+        (requestedVelocityMmPerSecond * requestedVelocityMmPerSecond) / (2.0f * accelerationMmPerSecondSquared_);
 
     if (2.0f * requestedAccelerationDistanceMm >= pathLengthMm_) {
         // Short move: triangular velocity profile.
@@ -93,31 +79,25 @@ bool TrajectoryPlanner::startMove(
 
         cruiseDistanceMm_ = 0.0f;
 
-        peakVelocityMmPerSecond_ =
-            sqrtf(pathLengthMm_ * accelerationMmPerSecondSquared_);
-    }
-    else {
+        peakVelocityMmPerSecond_ = sqrtf(pathLengthMm_ * accelerationMmPerSecondSquared_);
+    } else {
         // Long move: trapezoidal velocity profile.
         accelerationDistanceMm_ = requestedAccelerationDistanceMm;
 
-        cruiseDistanceMm_ =
-            pathLengthMm_ - 2.0f * accelerationDistanceMm_;
+        cruiseDistanceMm_ = pathLengthMm_ - 2.0f * accelerationDistanceMm_;
 
         peakVelocityMmPerSecond_ = requestedVelocityMmPerSecond;
     }
 
-    accelerationTimeSeconds_ =
-        peakVelocityMmPerSecond_ / accelerationMmPerSecondSquared_;
+    accelerationTimeSeconds_ = peakVelocityMmPerSecond_ / accelerationMmPerSecondSquared_;
 
     if (cruiseDistanceMm_ > 0.0f) {
         cruiseTimeSeconds_ = cruiseDistanceMm_ / peakVelocityMmPerSecond_;
-    }
-    else {
+    } else {
         cruiseTimeSeconds_ = 0.0f;
     }
 
-    totalTimeSeconds_ =
-        2.0f * accelerationTimeSeconds_ + cruiseTimeSeconds_;
+    totalTimeSeconds_ = 2.0f * accelerationTimeSeconds_ + cruiseTimeSeconds_;
 
     active_ = true;
 
@@ -138,48 +118,28 @@ TrajectoryReference TrajectoryPlanner::update(float timeStepSeconds) {
         // Acceleration:
         // s = 0.5*a*t^2
         // v = a*t
-        distanceAlongPathMm =
-            0.5f *
-            accelerationMmPerSecondSquared_ *
-            elapsedTimeSeconds_ *
-            elapsedTimeSeconds_;
+        distanceAlongPathMm = 0.5f * accelerationMmPerSecondSquared_ * elapsedTimeSeconds_ * elapsedTimeSeconds_;
 
-        pathVelocityMmPerSecond =
-            accelerationMmPerSecondSquared_ * elapsedTimeSeconds_;
-    }
-    else if (elapsedTimeSeconds_ < accelerationTimeSeconds_ + cruiseTimeSeconds_) {
+        pathVelocityMmPerSecond = accelerationMmPerSecondSquared_ * elapsedTimeSeconds_;
+    } else if (elapsedTimeSeconds_ < accelerationTimeSeconds_ + cruiseTimeSeconds_) {
         // Constant-velocity cruise.
-        const float timeAtCruiseSeconds =
-            elapsedTimeSeconds_ - accelerationTimeSeconds_;
+        const float timeAtCruiseSeconds = elapsedTimeSeconds_ - accelerationTimeSeconds_;
 
-        distanceAlongPathMm =
-            accelerationDistanceMm_ + peakVelocityMmPerSecond_ * timeAtCruiseSeconds;
+        distanceAlongPathMm = accelerationDistanceMm_ + peakVelocityMmPerSecond_ * timeAtCruiseSeconds;
 
         pathVelocityMmPerSecond = peakVelocityMmPerSecond_;
-    }
-    else if (elapsedTimeSeconds_ < totalTimeSeconds_) {
+    } else if (elapsedTimeSeconds_ < totalTimeSeconds_) {
         // Deceleration.
-        const float decelerationTimeSeconds =
-            elapsedTimeSeconds_ - accelerationTimeSeconds_ - cruiseTimeSeconds_;
+        const float decelerationTimeSeconds = elapsedTimeSeconds_ - accelerationTimeSeconds_ - cruiseTimeSeconds_;
 
         distanceAlongPathMm =
-            accelerationDistanceMm_ +
-            cruiseDistanceMm_ +
-            peakVelocityMmPerSecond_ * decelerationTimeSeconds -
+            accelerationDistanceMm_ + cruiseDistanceMm_ + peakVelocityMmPerSecond_ * decelerationTimeSeconds -
             0.5f * accelerationMmPerSecondSquared_ * decelerationTimeSeconds * decelerationTimeSeconds;
 
-        pathVelocityMmPerSecond =
-            peakVelocityMmPerSecond_ - accelerationMmPerSecondSquared_ * decelerationTimeSeconds;
-    }
-    else {
+        pathVelocityMmPerSecond = peakVelocityMmPerSecond_ - accelerationMmPerSecondSquared_ * decelerationTimeSeconds;
+    } else {
         // Use exact final displacement to avoid rounding drift.
-        reference_ = {
-            targetXDisplacementMm_,
-            targetYDisplacementMm_,
-            0.0f,
-            0.0f,
-            true
-        };
+        reference_ = {targetXDisplacementMm_, targetYDisplacementMm_, 0.0f, 0.0f, true};
 
         active_ = false;
         complete_ = true;
@@ -227,4 +187,4 @@ bool TrajectoryPlanner::isComplete() const {
     return complete_;
 }
 
-}  // namespace plotter
+} // namespace plotter

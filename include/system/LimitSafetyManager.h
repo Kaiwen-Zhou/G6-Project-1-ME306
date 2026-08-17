@@ -1,0 +1,80 @@
+#pragma once
+
+#include <stdint.h>
+
+#include "communication/GCodeController.h"
+#include "hardware/LimitSwitch.h"
+#include "system/PlotterSystem.h"
+
+namespace plotter {
+
+struct LimitSafetyUpdate {
+        bool faultEntered;
+        uint8_t pressedMask;
+        uint8_t recoverableMask;
+        uint8_t releasedExpectedMask;
+        float positionXMm;
+        float positionYMm;
+};
+
+/**
+ * Owns normal-operation limit monitoring and M999 recovery bookkeeping.
+ * Homing continues to own its own expected-switch policy.
+ */
+class LimitSafetyManager {
+    public:
+        enum LimitMask : uint8_t {
+            LEFT_LIMIT_MASK = 1U << 0,
+            RIGHT_LIMIT_MASK = 1U << 1,
+            BOTTOM_LIMIT_MASK = 1U << 2,
+            TOP_LIMIT_MASK = 1U << 3
+        };
+
+        LimitSafetyManager(LimitSwitch& leftLimit, LimitSwitch& rightLimit, LimitSwitch& bottomLimit,
+                           LimitSwitch& topLimit, GCodeController& gCodeController, PlotterSystem& plotterSystem);
+
+        void begin();
+
+        // Called every application loop outside HOMING so each switch can finish
+        // its own debounce state machine.
+        void updateSwitches();
+
+        // Low-rate normal-operation safety check. It may report an
+        // UNEXPECTED_LIMIT fault through PlotterSystem.
+        LimitSafetyUpdate update();
+
+        // M999 policy: all currently pressed switches must already be expected or
+        // have been attributed to a matching physical boundary at fault entry.
+        bool faultResetAllowed();
+        void armRecoverableLimitsAfterReset();
+
+        // A new G28 starts a separate homing policy and clears recovery state.
+        void clearForHoming();
+
+        // Non-limit faults must not inherit a previous fault attribution.
+        void clearRecoverableFaultAttribution();
+
+        uint8_t pressedMask() const;
+        uint8_t expectedMask() const;
+        uint8_t recoverableMask() const;
+        uint8_t resetBlockingMask() const;
+
+    private:
+        uint8_t unexpectedPressedMask() const;
+        uint8_t classifyRecoverableBoundaryLimits(uint8_t candidateMask) const;
+        uint8_t clearReleasedExpectedLimitsDuringMove();
+
+        LimitSwitch& leftLimit_;
+        LimitSwitch& rightLimit_;
+        LimitSwitch& bottomLimit_;
+        LimitSwitch& topLimit_;
+        GCodeController& gCodeController_;
+        PlotterSystem& plotterSystem_;
+
+        uint8_t recoverableLimitMask_;
+        uint8_t expectedLimitMask_;
+        uint8_t lastResetBlockingLimitMask_;
+        unsigned long lastSafetyCheckMs_;
+};
+
+} // namespace plotter

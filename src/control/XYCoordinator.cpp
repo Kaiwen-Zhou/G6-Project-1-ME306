@@ -2,34 +2,24 @@
 
 #include <Arduino.h>
 
-namespace
-{
+namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 }
 
-XYCoordinator::XYCoordinator(
-    Encoder& encoderA,
-    Encoder& encoderB,
-    AxisController& axisA,
-    AxisController& axisB,
-    const Converter& converter,
-    unsigned long controlIntervalMicros)
-    : encoderA_(encoderA),
-      encoderB_(encoderB),
-      axisA_(axisA),
-      axisB_(axisB),
+XYCoordinator::XYCoordinator(Encoder& encoderA, Encoder& encoderB, 
+                             AxisController& axisA, AxisController& axisB,
+                             const Converter& converter, 
+                             unsigned long controlIntervalMicros)
+    : encoderA_(encoderA), encoderB_(encoderB), 
+      axisA_(axisA), axisB_(axisB), 
       converter_(converter),
-      controlIntervalMicros_(controlIntervalMicros),
-      lastUpdateMicros_(0),
-      moveStartCountA_(0),
-      moveStartCountB_(0),
-      latestCounts_{0, 0},
-      referenceXDisplacementMm_(0.0f),
-      referenceYDisplacementMm_(0.0f),
-      referenceXVelocityMmPerSecond_(0.0f),
-      referenceYVelocityMmPerSecond_(0.0f),
-      active_(false)
-{
+      controlIntervalMicros_(controlIntervalMicros), 
+      lastUpdateMicros_(0), 
+      moveStartCountA_(0), moveStartCountB_(0),
+      latestCounts_{0, 0}, 
+      referenceXDisplacementMm_(0.0f), referenceYDisplacementMm_(0.0f),
+      referenceXVelocityMmPerSecond_(0.0f), referenceYVelocityMmPerSecond_(0.0f), 
+      active_(false) {
 }
 
 void XYCoordinator::begin() {
@@ -71,29 +61,20 @@ void XYCoordinator::startMove() {
     active_ = true;
 }
 
-void XYCoordinator::setCartesianReference(
-    float xDisplacementMm,
-    float yDisplacementMm,
-    float xVelocityMmPerSecond,
-    float yVelocityMmPerSecond) {
+void XYCoordinator::setCartesianReference(float xDisplacementMm, float yDisplacementMm, float xVelocityMmPerSecond,
+                                          float yVelocityMmPerSecond) {
     if (!active_) {
         return;
     }
 
-    const Converter::MotorReference motorReference =
-        converter_.cartesianToMotorReference(
-            xDisplacementMm,
-            yDisplacementMm,
-            xVelocityMmPerSecond,
-            yVelocityMmPerSecond);
+    const Converter::MotorReference motorReference = converter_.cartesianToMotorReference(
+        xDisplacementMm, yDisplacementMm, xVelocityMmPerSecond, yVelocityMmPerSecond);
 
     // Converter returns displacement relative to the move origin.
     // AxisController requires an absolute encoder-count reference.
-    const float absoluteAReference =
-        static_cast<float>(moveStartCountA_) + motorReference.aDisplacementCounts;
+    const float absoluteAReference = static_cast<float>(moveStartCountA_) + motorReference.aDisplacementCounts;
 
-    const float absoluteBReference =
-        static_cast<float>(moveStartCountB_) + motorReference.bDisplacementCounts;
+    const float absoluteBReference = static_cast<float>(moveStartCountB_) + motorReference.bDisplacementCounts;
 
     axisA_.setReference(absoluteAReference, motorReference.aVelocityCountsPerSecond);
 
@@ -121,8 +102,7 @@ void XYCoordinator::update() {
         return;
     }
 
-    const float timeStepSeconds =
-        static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
+    const float timeStepSeconds = static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
 
     // Read both encoder counts exactly once for this control cycle.
     latestCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
@@ -170,31 +150,19 @@ bool XYCoordinator::isActive() const {
 }
 
 bool XYCoordinator::areAxesWithinTolerance() const {
-    return active_ &&
-           axisA_.isWithinTolerance() &&
-           axisB_.isWithinTolerance();
+    return active_ && axisA_.isWithinTolerance() && axisB_.isWithinTolerance();
 }
 
 XYCoordinatorTelemetry XYCoordinator::getTelemetry() const {
-    const float aDisplacementCounts =
-        static_cast<float>(latestCounts_.countA) - static_cast<float>(moveStartCountA_);
+    const float aDisplacementCounts = static_cast<float>(latestCounts_.countA) - static_cast<float>(moveStartCountA_);
 
-    const float bDisplacementCounts =
-        static_cast<float>(latestCounts_.countB) - static_cast<float>(moveStartCountB_);
+    const float bDisplacementCounts = static_cast<float>(latestCounts_.countB) - static_cast<float>(moveStartCountB_);
 
-    const Converter::CartesianDisplacement
-        actualDisplacement =
-            converter_.motorToCartesianDisplacement(aDisplacementCounts, bDisplacementCounts);
+    const Converter::CartesianDisplacement actualDisplacement =
+        converter_.motorToCartesianDisplacement(aDisplacementCounts, bDisplacementCounts);
 
     return XYCoordinatorTelemetry{
-        referenceXDisplacementMm_,
-        referenceYDisplacementMm_,
-        referenceXVelocityMmPerSecond_,
-        referenceYVelocityMmPerSecond_,
-        actualDisplacement.xMm,
-        actualDisplacement.yMm,
-        axisA_.getTelemetry(),
-        axisB_.getTelemetry(),
-        active_
-    };
+        referenceXDisplacementMm_,      referenceYDisplacementMm_, referenceXVelocityMmPerSecond_,
+        referenceYVelocityMmPerSecond_, actualDisplacement.xMm,    actualDisplacement.yMm,
+        axisA_.getTelemetry(),          axisB_.getTelemetry(),     active_};
 }

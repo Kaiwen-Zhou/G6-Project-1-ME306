@@ -17,52 +17,46 @@
  * targetVelocityCountsPerSecond: trajectory reference generated A/B reference velocity
  * Kp/Ki/Kv: PWM/count or count's or count/s
  */
-class PIDController
-{
-public:
-    PIDController(float proportionalGain,
-                  float integralGain,
-                  float minimumOutput,
-                  float maximumOutput,
-                  float minimumIntegralOutput,
-                  float maximumIntegralOutput,
-                  float velocityFeedforwardGain = 0.0f);
+class PIDController {
+    public:
+        PIDController(float proportionalGain, float integralGain, float minimumOutput, float maximumOutput,
+                      float minimumIntegralOutput, float maximumIntegralOutput, float velocityFeedforwardGain = 0.0f);
 
-    // PI position feedback plus velocity feedforward.
-    float update(float error, float targetVelocityCountsPerSecond, float timeStepSeconds);
+        // PI position feedback plus velocity feedforward.
+        float update(float error, float targetVelocityCountsPerSecond, float timeStepSeconds);
 
-    // Compatibility overload for existing code.
-    // Equivalent to target velocity = 0.
-    float update(float error, float timeStepSeconds);
+        // Compatibility overload for existing code.
+        // Equivalent to target velocity = 0.
+        float update(float error, float timeStepSeconds);
 
-    // Clear the stored integral contribution.
-    void reset();
+        // Clear the stored integral contribution.
+        void reset();
 
-    // Change feedback gains without changing the stored integral state.
-    void setGains(float proportionalGain, float integralGain);
+        // Change feedback gains without changing the stored integral state.
+        void setGains(float proportionalGain, float integralGain);
 
-    void setVelocityFeedforwardGain( float velocityFeedforwardGain);
+        void setVelocityFeedforwardGain(float velocityFeedforwardGain);
 
-    void setOutputLimits(float minimumOutput, float maximumOutput);
+        void setOutputLimits(float minimumOutput, float maximumOutput);
 
-    void setIntegralLimits(float minimumIntegralOutput, float maximumIntegralOutput);
+        void setIntegralLimits(float minimumIntegralOutput, float maximumIntegralOutput);
 
-    float getProportionalGain() const;
-    float getIntegralGain() const;
-    float getVelocityFeedforwardGain() const;
-    float getIntegralOutput() const;
+        float getProportionalGain() const;
+        float getIntegralGain() const;
+        float getVelocityFeedforwardGain() const;
+        float getIntegralOutput() const;
 
-private:
-    float proportionalGain_;
-    float integralGain_;
-    float velocityFeedforwardGain_;
+    private:
+        float proportionalGain_;
+        float integralGain_;
+        float velocityFeedforwardGain_;
 
-    // Integral contribution in motor-output units.
-    float integralOutput_;
+        // Integral contribution in motor-output units.
+        float integralOutput_;
 
-    float minimumOutput_;
-    float maximumOutput_;
+        float minimumOutput_;
+        float maximumOutput_;
 
-    float minimumIntegralOutput_;
-    float maximumIntegralOutput_;
+        float minimumIntegralOutput_;
+        float maximumIntegralOutput_;
 };

@@ -2,8 +2,7 @@
 
 #include <Arduino.h>
 
-namespace
-{
+namespace {
 float absoluteValue(float value) {
     return value < 0.0f ? -value : value;
 }
@@ -19,48 +18,35 @@ int16_t commandForVelocitySign(float velocity, uint8_t pwm) {
 
     return 0;
 }
-}
+} // namespace
 
-HomingController::HomingController(
-    Encoder& encoderA,
-    Encoder& encoderB,
-    MotorDriver& motorA,
-    MotorDriver& motorB,
-    const Converter& converter,
-    LimitSwitch& xMinSwitch,
-    LimitSwitch& xMaxSwitch,
-    LimitSwitch& yMinSwitch,
-    LimitSwitch& yMaxSwitch,
-    const HomingConfig& config)
-    : encoderA_(encoderA),
-      encoderB_(encoderB),
-      motorA_(motorA),
-      motorB_(motorB),
+HomingController::HomingController(Encoder& encoderA, Encoder& encoderB, 
+                                   MotorDriver& motorA, MotorDriver& motorB,
+                                   const Converter& converter, 
+                                   LimitSwitch& xMinSwitch, LimitSwitch& xMaxSwitch,
+                                   LimitSwitch& yMinSwitch, LimitSwitch& yMaxSwitch, 
+                                   const HomingConfig& config)
+    : encoderA_(encoderA), encoderB_(encoderB), 
+      motorA_(motorA), motorB_(motorB), 
       converter_(converter),
-      limitSwitches_{
-          &xMinSwitch,
-          &xMaxSwitch,
-          &yMinSwitch,
-          &yMaxSwitch},
+      limitSwitches_{&xMinSwitch, &xMaxSwitch, &yMinSwitch, &yMaxSwitch}, 
       config_(config),
-      result_{{0, 0}, {0, 0}, {0, 0}, {0, 0}, 0.0f, 0.0f, false, false},
-      firstContactCounts_{0, 0},
-      releaseCounts_{0, 0},
+      result_{{0, 0}, {0, 0}, false, false}, 
+      firstContactCounts_{0, 0}, releaseCounts_{0, 0}, 
       stage_(HomingStage::IDLE),
-      phase_(HomingPhase::IDLE),
-      expectedSwitch_(ExpectedSwitch::NONE),
-      fault_(HomingFault::NONE),
+      phase_(HomingPhase::IDLE), 
+      expectedSwitch_(ExpectedSwitch::NONE), 
+      fault_(HomingFault::NONE), 
       overallStartMs_(0),
-      phaseStartMs_(0),
-      allowedPressedMask_(0),
-      active_(false)
-{
+      phaseStartMs_(0), 
+      allowedPressedMask_(0), 
+      active_(false) {
 }
 
 void HomingController::begin() {
     stopMotors();
 
-    result_ = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, 0.0f, 0.0f, false, false};
+    result_ = {{0, 0}, {0, 0}, false, false};
     firstContactCounts_ = {0, 0};
     releaseCounts_ = {0, 0};
 
@@ -80,7 +66,7 @@ void HomingController::begin() {
 bool HomingController::start() {
     stopMotors();
 
-    result_ = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, 0.0f, 0.0f, false, false};
+    result_ = {{0, 0}, {0, 0}, false, false};
     fault_ = HomingFault::NONE;
     active_ = false;
 
@@ -100,7 +86,9 @@ bool HomingController::start() {
     overallStartMs_ = millis();
     active_ = true;
 
-    beginTarget(HomingStage::X_MAX);
+    // Home directly to each origin. The max switches remain active safety
+    // inputs but are no longer visited for travel calibration.
+    beginTarget(HomingStage::X_ORIGIN);
     return true;
 }
 
@@ -127,103 +115,94 @@ void HomingController::update() {
     }
 
     switch (phase_) {
-        case HomingPhase::COARSE_APPROACH:
-            if (switchFor(expectedSwitch_).isPressed()) {
-                stopMotors();
-                firstContactCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
-                setPhase(HomingPhase::CONTACT_PAUSE);
-            }
-            else if (phaseTimedOut(config_.searchTimeoutMs)) {
-                fail(HomingFault::TIMEOUT);
-            }
-            else {
-                driveTowardTarget(config_.coarseApproachPwm);
-            }
-            break;
+    case HomingPhase::COARSE_APPROACH:
+        if (switchFor(expectedSwitch_).isPressed()) {
+            stopMotors();
+            firstContactCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
+            setPhase(HomingPhase::CONTACT_PAUSE);
+        } else if (phaseTimedOut(config_.searchTimeoutMs)) {
+            fail(HomingFault::TIMEOUT);
+        } else {
+            driveTowardTarget(config_.coarseApproachPwm);
+        }
+        break;
 
-        case HomingPhase::CONTACT_PAUSE:
+    case HomingPhase::CONTACT_PAUSE:
+        stopMotors();
+
+        if ((millis() - phaseStartMs_) >= config_.contactPauseMs) {
+            setPhase(HomingPhase::BACKOFF);
+        }
+        break;
+
+    case HomingPhase::BACKOFF:
+        if (phaseTimedOut(config_.backoffTimeoutMs)) {
+            fail(HomingFault::TIMEOUT);
+            break;
+        }
+
+        if (switchFor(expectedSwitch_).isReleased() && distanceFromFirstContactMm() >= config_.backoffDistanceMm) {
+            stopMotors();
+            setPhase(HomingPhase::FINE_APPROACH);
+        } else {
+            driveAwayFromTarget(config_.backoffPwm);
+        }
+        break;
+
+    case HomingPhase::FINE_APPROACH:
+        if (switchFor(expectedSwitch_).isPressed()) {
+            stopMotors();
+            setPhase(HomingPhase::FINE_CONTACT_PAUSE);
+        } else if (phaseTimedOut(config_.searchTimeoutMs)) {
+            fail(HomingFault::TIMEOUT);
+        } else {
+            driveTowardTarget(config_.fineApproachPwm);
+        }
+        break;
+
+    case HomingPhase::FINE_CONTACT_PAUSE:
+        stopMotors();
+
+        // A released switch here means the fine contact did not remain
+        // stable during the pause. Approach it again rather than using
+        // an uncontrolled rebound as the reference position.
+        if (switchFor(expectedSwitch_).isReleased()) {
+            switchFor(expectedSwitch_).consumeReleasedEvent();
+            setPhase(HomingPhase::FINE_APPROACH);
+        } else if ((millis() - phaseStartMs_) >= config_.fineContactPauseMs) {
+            // Discard any stale release event from earlier bounce. The
+            // switch is confirmed pressed at the start of FINAL_RELEASE,
+            // so the next event must be its new falling edge.
+            switchFor(expectedSwitch_).consumeReleasedEvent();
+            setPhase(HomingPhase::FINAL_RELEASE);
+        }
+        break;
+
+    case HomingPhase::FINAL_RELEASE:
+        if (switchFor(expectedSwitch_).consumeReleasedEvent()) {
             stopMotors();
 
-            if ((millis() - phaseStartMs_) >= config_.contactPauseMs) {
-                setPhase(HomingPhase::BACKOFF);
-            }
-            break;
+            // Capture both motor-space counts in the same update that
+            // accepts the debounced active-high falling edge.
+            releaseCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
+            setPhase(HomingPhase::RECORD_POSITION);
+        } else if (phaseTimedOut(config_.finalReleaseTimeoutMs)) {
+            fail(HomingFault::TIMEOUT);
+        } else {
+            driveAwayFromTarget(config_.finalReleasePwm);
+        }
+        break;
 
-        case HomingPhase::BACKOFF:
-            if (phaseTimedOut(config_.backoffTimeoutMs)) {
-                fail(HomingFault::TIMEOUT);
-                break;
-            }
+    case HomingPhase::RECORD_POSITION:
+        recordCurrentTarget();
+        advanceAfterOriginRecorded();
+        break;
 
-            if (switchFor(expectedSwitch_).isReleased() &&
-                distanceFromFirstContactMm() >= config_.backoffDistanceMm) {
-                stopMotors();
-                setPhase(HomingPhase::FINE_APPROACH);
-            }
-            else {
-                driveAwayFromTarget(config_.backoffPwm);
-            }
-            break;
-
-        case HomingPhase::FINE_APPROACH:
-            if (switchFor(expectedSwitch_).isPressed()) {
-                stopMotors();
-                setPhase(HomingPhase::FINE_CONTACT_PAUSE);
-            }
-            else if (phaseTimedOut(config_.searchTimeoutMs)) {
-                fail(HomingFault::TIMEOUT);
-            }
-            else {
-                driveTowardTarget(config_.fineApproachPwm);
-            }
-            break;
-
-        case HomingPhase::FINE_CONTACT_PAUSE:
-            stopMotors();
-
-            // A released switch here means the fine contact did not remain
-            // stable during the pause. Approach it again rather than using
-            // an uncontrolled rebound as the reference position.
-            if (switchFor(expectedSwitch_).isReleased()) {
-                switchFor(expectedSwitch_).consumeReleasedEvent();
-                setPhase(HomingPhase::FINE_APPROACH);
-            }
-            else if ((millis() - phaseStartMs_) >= config_.fineContactPauseMs) {
-                // Discard any stale release event from earlier bounce. The
-                // switch is confirmed pressed at the start of FINAL_RELEASE,
-                // so the next event must be its new falling edge.
-                switchFor(expectedSwitch_).consumeReleasedEvent();
-                setPhase(HomingPhase::FINAL_RELEASE);
-            }
-            break;
-
-        case HomingPhase::FINAL_RELEASE:
-            if (switchFor(expectedSwitch_).consumeReleasedEvent()) {
-                stopMotors();
-
-                // Capture both motor-space counts in the same update that
-                // accepts the debounced active-high falling edge.
-                releaseCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
-                setPhase(HomingPhase::RECORD_POSITION);
-            }
-            else if (phaseTimedOut(config_.finalReleaseTimeoutMs)) {
-                fail(HomingFault::TIMEOUT);
-            }
-            else {
-                driveAwayFromTarget(config_.finalReleasePwm);
-            }
-            break;
-
-        case HomingPhase::RECORD_POSITION:
-            recordCurrentTarget();
-            advanceAfterFineContact();
-            break;
-
-        case HomingPhase::IDLE:
-        case HomingPhase::COMPLETE:
-        case HomingPhase::ABORTED:
-            stopMotors();
-            break;
+    case HomingPhase::IDLE:
+    case HomingPhase::COMPLETE:
+    case HomingPhase::ABORTED:
+        stopMotors();
+        break;
     }
 }
 
@@ -274,25 +253,17 @@ void HomingController::beginTarget(HomingStage nextStage) {
     stage_ = nextStage;
 
     switch (stage_) {
-        case HomingStage::X_MAX:
-            expectedSwitch_ = ExpectedSwitch::X_MAX;
-            break;
+    case HomingStage::X_ORIGIN:
+        expectedSwitch_ = ExpectedSwitch::X_MIN;
+        break;
 
-        case HomingStage::X_ORIGIN:
-            expectedSwitch_ = ExpectedSwitch::X_MIN;
-            break;
+    case HomingStage::Y_ORIGIN:
+        expectedSwitch_ = ExpectedSwitch::Y_MIN;
+        break;
 
-        case HomingStage::Y_MAX:
-            expectedSwitch_ = ExpectedSwitch::Y_MAX;
-            break;
-
-        case HomingStage::Y_ORIGIN:
-            expectedSwitch_ = ExpectedSwitch::Y_MIN;
-            break;
-
-        default:
-            expectedSwitch_ = ExpectedSwitch::NONE;
-            break;
+    default:
+        expectedSwitch_ = ExpectedSwitch::NONE;
+        break;
     }
 
     clearSwitchEvents();
@@ -315,37 +286,29 @@ void HomingController::setPhase(HomingPhase nextPhase) {
     phaseStartMs_ = millis();
 }
 
-void HomingController::advanceAfterFineContact() {
+void HomingController::advanceAfterOriginRecorded() {
     switch (stage_) {
-        case HomingStage::X_MAX:
-            beginTarget(HomingStage::X_ORIGIN);
-            break;
+    case HomingStage::X_ORIGIN:
+        beginTarget(HomingStage::Y_ORIGIN);
+        break;
 
-        case HomingStage::X_ORIGIN:
-            beginTarget(HomingStage::Y_MAX);
-            break;
+    case HomingStage::Y_ORIGIN:
+        stopMotors();
 
-        case HomingStage::Y_MAX:
-            beginTarget(HomingStage::Y_ORIGIN);
-            break;
+        // Both physical axes are now at their origin switches.
+        // Reset both motor-space counts in one critical section.
+        Encoder::zeroCountPair(encoderA_, encoderB_);
 
-        case HomingStage::Y_ORIGIN:
-            stopMotors();
+        stage_ = HomingStage::COMPLETE;
+        phase_ = HomingPhase::COMPLETE;
+        expectedSwitch_ = ExpectedSwitch::NONE;
+        active_ = false;
+        clearSwitchEvents();
+        break;
 
-            // Both physical axes are now at their origin switches.
-            // Reset both motor-space counts in one critical section.
-            Encoder::zeroCountPair(encoderA_, encoderB_);
-
-            stage_ = HomingStage::COMPLETE;
-            phase_ = HomingPhase::COMPLETE;
-            expectedSwitch_ = ExpectedSwitch::NONE;
-            active_ = false;
-            clearSwitchEvents();
-            break;
-
-        default:
-            fail(HomingFault::INVALID_CONFIGURATION);
-            break;
+    default:
+        fail(HomingFault::INVALID_CONFIGURATION);
+        break;
     }
 }
 
@@ -364,13 +327,11 @@ void HomingController::clearSwitchEvents() {
 }
 
 bool HomingController::hasContradictoryLimits() const {
-    const bool xContradiction =
-        limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MIN)]->isPressed() &&
-        limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MAX)]->isPressed();
+    const bool xContradiction = limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MIN)]->isPressed() &&
+                                limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MAX)]->isPressed();
 
-    const bool yContradiction =
-        limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MIN)]->isPressed() &&
-        limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MAX)]->isPressed();
+    const bool yContradiction = limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MIN)]->isPressed() &&
+                                limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MAX)]->isPressed();
 
     return xContradiction || yContradiction;
 }
@@ -406,10 +367,6 @@ LimitSwitch& HomingController::switchFor(ExpectedSwitch expected) {
 }
 
 int8_t HomingController::targetXDirection() const {
-    if (stage_ == HomingStage::X_MAX) {
-        return 1;
-    }
-
     if (stage_ == HomingStage::X_ORIGIN) {
         return -1;
     }
@@ -418,10 +375,6 @@ int8_t HomingController::targetXDirection() const {
 }
 
 int8_t HomingController::targetYDirection() const {
-    if (stage_ == HomingStage::Y_MAX) {
-        return 1;
-    }
-
     if (stage_ == HomingStage::Y_ORIGIN) {
         return -1;
     }
@@ -438,12 +391,8 @@ void HomingController::driveAwayFromTarget(uint8_t pwm) {
 }
 
 void HomingController::driveCartesian(int8_t xDirection, int8_t yDirection, uint8_t pwm) {
-    const Converter::MotorReference reference =
-        converter_.cartesianToMotorReference(
-            0.0f,
-            0.0f,
-            static_cast<float>(xDirection),
-            static_cast<float>(yDirection));
+    const Converter::MotorReference reference = converter_.cartesianToMotorReference(
+        0.0f, 0.0f, static_cast<float>(xDirection), static_cast<float>(yDirection));
 
     motorA_.setOutput(commandForVelocitySign(reference.aVelocityCountsPerSecond, pwm));
 
@@ -459,11 +408,10 @@ float HomingController::distanceFromFirstContactMm() const {
     const Encoder::CountPair current = Encoder::getCountPair(encoderA_, encoderB_);
 
     const Converter::CartesianDisplacement displacement =
-        converter_.motorToCartesianDisplacement(
-            static_cast<float>(current.countA - firstContactCounts_.countA),
-            static_cast<float>(current.countB - firstContactCounts_.countB));
+        converter_.motorToCartesianDisplacement(static_cast<float>(current.countA - firstContactCounts_.countA),
+                                                static_cast<float>(current.countB - firstContactCounts_.countB));
 
-    if (stage_ == HomingStage::X_MAX || stage_ == HomingStage::X_ORIGIN) {
+    if (stage_ == HomingStage::X_ORIGIN) {
         return absoluteValue(displacement.xMm);
     }
 
@@ -472,45 +420,19 @@ float HomingController::distanceFromFirstContactMm() const {
 
 void HomingController::recordCurrentTarget() {
     switch (stage_) {
-        case HomingStage::X_MAX:
-            result_.xMaximum = releaseCounts_;
-            break;
+    case HomingStage::X_ORIGIN:
+        result_.xOrigin = releaseCounts_;
+        result_.xValid = true;
+        break;
 
-        case HomingStage::X_ORIGIN:
-        {
-            result_.xOrigin = releaseCounts_;
+    case HomingStage::Y_ORIGIN:
+        result_.yOrigin = releaseCounts_;
+        result_.yValid = true;
+        break;
 
-            const Converter::CartesianDisplacement travel =
-                converter_.motorToCartesianDisplacement(
-                    static_cast<float>(result_.xMaximum.countA - result_.xOrigin.countA),
-                    static_cast<float>(result_.xMaximum.countB - result_.xOrigin.countB));
-
-            result_.xTravelMm = absoluteValue(travel.xMm);
-            result_.xValid = true;
-            break;
-        }
-
-        case HomingStage::Y_MAX:
-            result_.yMaximum = releaseCounts_;
-            break;
-
-        case HomingStage::Y_ORIGIN:
-        {
-            result_.yOrigin = releaseCounts_;
-
-            const Converter::CartesianDisplacement travel =
-                converter_.motorToCartesianDisplacement(
-                    static_cast<float>(result_.yMaximum.countA - result_.yOrigin.countA),
-                    static_cast<float>(result_.yMaximum.countB - result_.yOrigin.countB));
-
-            result_.yTravelMm = absoluteValue(travel.yMm);
-            result_.yValid = true;
-            break;
-        }
-
-        default:
-            fail(HomingFault::INVALID_CONFIGURATION);
-            break;
+    default:
+        fail(HomingFault::INVALID_CONFIGURATION);
+        break;
     }
 }
 
@@ -519,13 +441,9 @@ bool HomingController::phaseTimedOut(unsigned long timeoutMs) const {
 }
 
 bool HomingController::configurationIsValid() const {
-    return config_.coarseApproachPwm > 0 &&
-           config_.backoffPwm > 0 &&
-           config_.fineApproachPwm > 0 &&
-           config_.backoffDistanceMm > 0.0f &&
-           config_.searchTimeoutMs > 0 &&
-           config_.backoffTimeoutMs > 0 &&
-           config_.overallTimeoutMs > 0;
+    return config_.coarseApproachPwm > 0 && config_.backoffPwm > 0 && config_.fineApproachPwm > 0 &&
+           config_.finalReleasePwm > 0 && config_.backoffDistanceMm > 0.0f && config_.searchTimeoutMs > 0 &&
+           config_.backoffTimeoutMs > 0 && config_.finalReleaseTimeoutMs > 0 && config_.overallTimeoutMs > 0;
 }
 
 void HomingController::fail(HomingFault fault) {
