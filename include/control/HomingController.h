@@ -54,7 +54,8 @@ class HomingController {
     public:
         HomingController(Encoder& encoderA, Encoder& encoderB, MotorDriver& motorA, MotorDriver& motorB,
                          const Converter& converter, LimitSwitch& xMinSwitch, LimitSwitch& xMaxSwitch,
-                         LimitSwitch& yMinSwitch, LimitSwitch& yMaxSwitch, const HomingConfig& config);
+                         LimitSwitch& yMinSwitch, LimitSwitch& yMaxSwitch, const HomingConfig& config,
+                         bool debounceLimitInterrupts = true);
 
         // LimitSwitch::begin(...) and the ISR wiring remain hardware-startup
         // responsibilities. This method only resets homing state.
@@ -68,6 +69,11 @@ class HomingController {
 
         // Execute at most one non-blocking state-machine step.
         void update();
+
+        // Called from the main loop after a limit ISR is latched. Immediately
+        // stops open-loop homing motion. Configuration selects whether the
+        // edge must then pass debounce verification before it is accepted.
+        void notifyLimitInterrupt(uint8_t interruptMask);
 
         // Immediately stop open-loop homing motion.
         void stop();
@@ -91,8 +97,10 @@ class HomingController {
 
         void updateAllSwitches();
         void clearSwitchEvents();
-        bool hasContradictoryLimits() const;
-        bool hasUnexpectedLimit();
+        bool interruptVerificationPending();
+        bool switchTriggered(ExpectedSwitch expected, uint8_t interruptMask) const;
+        bool hasContradictoryLimits(uint8_t interruptMask = 0U) const;
+        bool hasUnexpectedLimit(uint8_t interruptMask = 0U);
 
         LimitSwitch& switchFor(ExpectedSwitch expected);
 
@@ -139,6 +147,9 @@ class HomingController {
         // target is allowed until it releases. If it presses again later,
         // it is treated as the wrong limit.
         uint8_t allowedPressedMask_;
+
+        uint8_t interruptVerificationMask_;
+        bool debounceLimitInterrupts_;
 
         bool active_;
 };

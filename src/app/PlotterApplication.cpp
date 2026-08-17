@@ -45,6 +45,7 @@ PlotterApplication::PlotterApplication()
       topLimit_(PinConfig::LIMIT_SWITCH_TOP_PIN, 
                 SystemConfig::LIMIT_SWITCH_INPUT_MODE,
                 SystemConfig::LIMIT_SWITCH_DEBOUNCE_MS),
+      limitInterruptMask_(0U),
       motorA_(PinConfig::MOTOR_1_DIRECTION_PIN, 
               PinConfig::MOTOR_1_PWM_PIN, 
               SystemConfig::MOTOR_1_DIRECTION_INVERTED,
@@ -78,7 +79,8 @@ PlotterApplication::PlotterApplication()
                         converter_, 
                         leftLimit_, rightLimit_, 
                         bottomLimit_, topLimit_, 
-                        homingConfig_),
+                        homingConfig_,
+                        SystemConfig::HOMING_LIMIT_DEBOUNCE_ENABLED),
       trajectoryPlanner_(), plotterSystem_(axisA_, axisB_, xyCoordinator_, trajectoryPlanner_, homingController_),
       gCodeController_(plotterSystem_, 
                        homingController_, 
@@ -123,6 +125,16 @@ void PlotterApplication::begin() {
 }
 
 void PlotterApplication::update() {
+    const uint8_t limitInterruptMask = consumeLimitInterruptMask();
+
+    if (limitInterruptMask != 0U && gCodeController_.systemStarted()) {
+        if (plotterSystem_.state() == PlotterState::HOMING) {
+            homingController_.notifyLimitInterrupt(limitInterruptMask);
+        } else {
+            reportLimitSafetyUpdate(limitSafety_.handleLimitInterrupts(limitInterruptMask));
+        }
+    }
+
     // During HOMING, HomingController owns switch updates and event handling.
     if (!gCodeController_.systemStarted() || plotterSystem_.state() != PlotterState::HOMING) {
         limitSafety_.updateSwitches();
@@ -153,25 +165,37 @@ void PlotterApplication::onEncoderBInterrupt() {
 void PlotterApplication::onLeftLimitInterrupt() {
     if (activeInstance_ != nullptr) {
         activeInstance_->leftLimit_.notifyFromISR();
+        activeInstance_->limitInterruptMask_ |= LimitSafetyManager::LEFT_LIMIT_MASK;
     }
 }
 
 void PlotterApplication::onRightLimitInterrupt() {
     if (activeInstance_ != nullptr) {
         activeInstance_->rightLimit_.notifyFromISR();
+        activeInstance_->limitInterruptMask_ |= LimitSafetyManager::RIGHT_LIMIT_MASK;
     }
 }
 
 void PlotterApplication::onBottomLimitInterrupt() {
     if (activeInstance_ != nullptr) {
         activeInstance_->bottomLimit_.notifyFromISR();
+        activeInstance_->limitInterruptMask_ |= LimitSafetyManager::BOTTOM_LIMIT_MASK;
     }
 }
 
 void PlotterApplication::onTopLimitInterrupt() {
     if (activeInstance_ != nullptr) {
         activeInstance_->topLimit_.notifyFromISR();
+        activeInstance_->limitInterruptMask_ |= LimitSafetyManager::TOP_LIMIT_MASK;
     }
+}
+
+uint8_t PlotterApplication::consumeLimitInterruptMask() {
+    noInterrupts();
+    const uint8_t mask = limitInterruptMask_;
+    limitInterruptMask_ = 0U;
+    interrupts();
+    return mask;
 }
 
 char PlotterApplication::upperAscii(char character) {

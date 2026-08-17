@@ -72,6 +72,9 @@ constexpr unsigned long HOMING_BACKOFF_TIMEOUT_MS = 5000UL;
 constexpr unsigned long HOMING_FINAL_RELEASE_TIMEOUT_MS = 5000UL;
 constexpr unsigned long HOMING_OVERALL_TIMEOUT_MS = 180000UL;
 
+// true: stop on the ISR edge, then wait for software debounce confirmation.
+// false: stop on the ISR edge and accept it immediately during homing.
+constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = true;
 // Temporary values until hardware direction testing.
 constexpr bool MOTOR_1_DIRECTION_INVERTED = false;
 constexpr bool MOTOR_2_DIRECTION_INVERTED = false;

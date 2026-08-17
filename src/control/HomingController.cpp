@@ -25,7 +25,8 @@ HomingController::HomingController(Encoder& encoderA, Encoder& encoderB,
                                    const Converter& converter, 
                                    LimitSwitch& xMinSwitch, LimitSwitch& xMaxSwitch,
                                    LimitSwitch& yMinSwitch, LimitSwitch& yMaxSwitch, 
-                                   const HomingConfig& config)
+                                   const HomingConfig& config,
+                                   bool debounceLimitInterrupts)
     : encoderA_(encoderA), encoderB_(encoderB), 
       motorA_(motorA), motorB_(motorB), 
       converter_(converter),
@@ -40,6 +41,8 @@ HomingController::HomingController(Encoder& encoderA, Encoder& encoderB,
       overallStartMs_(0),
       phaseStartMs_(0), 
       allowedPressedMask_(0), 
+      interruptVerificationMask_(0),
+      debounceLimitInterrupts_(debounceLimitInterrupts),
       active_(false) {
 }
 
@@ -58,6 +61,7 @@ void HomingController::begin() {
     overallStartMs_ = 0;
     phaseStartMs_ = 0;
     allowedPressedMask_ = 0;
+    interruptVerificationMask_ = 0;
     active_ = false;
 
     clearSwitchEvents();
@@ -68,6 +72,7 @@ bool HomingController::start() {
 
     result_ = {{0, 0}, {0, 0}, false, false};
     fault_ = HomingFault::NONE;
+    interruptVerificationMask_ = 0;
     active_ = false;
 
     clearSwitchEvents();
@@ -99,7 +104,19 @@ void HomingController::update() {
 
     updateAllSwitches();
 
-    if (hasContradictoryLimits()) {
+    uint8_t acceptedInterruptMask = 0U;
+
+    if (debounceLimitInterrupts_) {
+        if (interruptVerificationPending()) {
+            stopMotors();
+            return;
+        }
+    } else {
+        acceptedInterruptMask = interruptVerificationMask_;
+        interruptVerificationMask_ = 0U;
+    }
+
+    if (hasContradictoryLimits(acceptedInterruptMask)) {
         fail(HomingFault::CONTRADICTORY_LIMITS);
         return;
     }
@@ -109,14 +126,14 @@ void HomingController::update() {
         return;
     }
 
-    if (hasUnexpectedLimit()) {
+    if (hasUnexpectedLimit(acceptedInterruptMask)) {
         fail(HomingFault::WRONG_LIMIT);
         return;
     }
 
     switch (phase_) {
     case HomingPhase::COARSE_APPROACH:
-        if (switchFor(expectedSwitch_).isPressed()) {
+        if (switchTriggered(expectedSwitch_, acceptedInterruptMask)) {
             stopMotors();
             firstContactCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
             setPhase(HomingPhase::CONTACT_PAUSE);
@@ -150,7 +167,7 @@ void HomingController::update() {
         break;
 
     case HomingPhase::FINE_APPROACH:
-        if (switchFor(expectedSwitch_).isPressed()) {
+        if (switchTriggered(expectedSwitch_, acceptedInterruptMask)) {
             stopMotors();
             setPhase(HomingPhase::FINE_CONTACT_PAUSE);
         } else if (phaseTimedOut(config_.searchTimeoutMs)) {
@@ -206,8 +223,18 @@ void HomingController::update() {
     }
 }
 
+void HomingController::notifyLimitInterrupt(uint8_t interruptMask) {
+    if (!active_ || interruptMask == 0U) {
+        return;
+    }
+
+    interruptVerificationMask_ |= interruptMask;
+    stopMotors();
+}
+
 void HomingController::stop() {
     stopMotors();
+    interruptVerificationMask_ = 0;
     active_ = false;
 
     if (stage_ != HomingStage::COMPLETE && stage_ != HomingStage::ABORTED) {
@@ -251,6 +278,7 @@ HomingResult HomingController::result() const {
 
 void HomingController::beginTarget(HomingStage nextStage) {
     stage_ = nextStage;
+    interruptVerificationMask_ = 0;
 
     switch (stage_) {
     case HomingStage::X_ORIGIN:
@@ -326,17 +354,43 @@ void HomingController::clearSwitchEvents() {
     }
 }
 
-bool HomingController::hasContradictoryLimits() const {
-    const bool xContradiction = limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MIN)]->isPressed() &&
-                                limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::X_MAX)]->isPressed();
+bool HomingController::interruptVerificationPending() {
+    for (uint8_t index = 0; index < LIMIT_SWITCH_COUNT; ++index) {
+        const uint8_t bit = static_cast<uint8_t>(1U << index);
 
-    const bool yContradiction = limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MIN)]->isPressed() &&
-                                limitSwitches_[static_cast<uint8_t>(ExpectedSwitch::Y_MAX)]->isPressed();
+        if ((interruptVerificationMask_ & bit) == 0U) {
+            continue;
+        }
+
+        if (!limitSwitches_[index]->isInterruptVerificationPending()) {
+            interruptVerificationMask_ &= static_cast<uint8_t>(~bit);
+        }
+    }
+
+    return interruptVerificationMask_ != 0U;
+}
+
+bool HomingController::switchTriggered(ExpectedSwitch expected, uint8_t interruptMask) const {
+    if (expected == ExpectedSwitch::NONE) {
+        return false;
+    }
+
+    const uint8_t index = static_cast<uint8_t>(expected);
+    const uint8_t bit = static_cast<uint8_t>(1U << index);
+    return limitSwitches_[index]->isPressed() || (interruptMask & bit) != 0U;
+}
+
+bool HomingController::hasContradictoryLimits(uint8_t interruptMask) const {
+    const bool xContradiction = switchTriggered(ExpectedSwitch::X_MIN, interruptMask) &&
+                                switchTriggered(ExpectedSwitch::X_MAX, interruptMask);
+
+    const bool yContradiction = switchTriggered(ExpectedSwitch::Y_MIN, interruptMask) &&
+                                switchTriggered(ExpectedSwitch::Y_MAX, interruptMask);
 
     return xContradiction || yContradiction;
 }
 
-bool HomingController::hasUnexpectedLimit() {
+bool HomingController::hasUnexpectedLimit(uint8_t interruptMask) {
     for (uint8_t index = 0; index < LIMIT_SWITCH_COUNT; ++index) {
         const ExpectedSwitch current = static_cast<ExpectedSwitch>(index);
 
@@ -354,7 +408,7 @@ bool HomingController::hasUnexpectedLimit() {
             continue;
         }
 
-        if (limitSwitches_[index]->isPressed()) {
+        if (limitSwitches_[index]->isPressed() || (interruptMask & bit) != 0U) {
             return true;
         }
     }
@@ -453,5 +507,6 @@ void HomingController::fail(HomingFault fault) {
     stage_ = HomingStage::ABORTED;
     phase_ = HomingPhase::ABORTED;
     expectedSwitch_ = ExpectedSwitch::NONE;
+    interruptVerificationMask_ = 0;
     active_ = false;
 }

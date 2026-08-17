@@ -22,6 +22,9 @@ class LimitSwitch {
         // Called only by the ISR if an interrupt is attached to the switch pin.
         void notifyFromISR();
 
+        // Returns true while an ISR-triggered rising edge is awaiting debounce verification.
+        bool isInterruptVerificationPending() const;
+
         // Returns true if the switch is pressed.
         // The current junction-board inputs are active-high: HIGH means pressed.
         bool isPressed() const;

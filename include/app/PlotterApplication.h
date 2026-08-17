@@ -40,6 +40,8 @@ class PlotterApplication {
         static void onBottomLimitInterrupt();
         static void onTopLimitInterrupt();
 
+        uint8_t consumeLimitInterruptMask();
+
         static char upperAscii(char character);
         static bool isSpace(char character);
         static bool lineEqualsIgnoringSpaces(const char* line, const char* expected);
@@ -69,6 +71,7 @@ class PlotterApplication {
         LimitSwitch rightLimit_;
         LimitSwitch bottomLimit_;
         LimitSwitch topLimit_;
+        volatile uint8_t limitInterruptMask_;
 
         MotorDriver motorA_;
         MotorDriver motorB_;
