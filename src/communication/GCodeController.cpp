@@ -1,326 +1,217 @@
 #include "communication/GCodeController.h"
 
-namespace plotter
-{
+namespace plotter {
 
-namespace
-{
+namespace {
 
-GCodeSafetyLimits makeInvalidSafetyLimits(float maximumFeedrateMmPerMinute)
-{
+GCodeSafetyLimits makeInvalidSafetyLimits(float maximumFeedrateMmPerMinute) {
     // Minimum greater than maximum intentionally keeps G01 disabled until a
     // valid HomingResult is available.
-    return {
-        1.0f,
-        0.0f,
-        1.0f,
-        0.0f,
-        maximumFeedrateMmPerMinute
-    };
+    return {1.0f, 0.0f, 1.0f, 0.0f, maximumFeedrateMmPerMinute};
 }
 
-GCodeCommand makeEmptyCommand()
-{
-    return {
-        GCodeCommandType::NONE,
-        0.0f,
-        0.0f,
-        0.0f,
-        false,
-        false,
-        false
-    };
+GCodeCommand makeEmptyCommand() {
+    return {GCodeCommandType::NONE, 0.0f, 0.0f, 0.0f, false, false, false};
 }
 
-GCodeControllerResult waitingResult()
-{
+GCodeControllerResult waitingResult() {
     return {
-        false,
-        false,
-        false,
-        makeEmptyCommand(),
-        GCodeParseError::NONE,
-        GCodeControllerError::NONE,
-        RejectReason::NONE
-    };
+        false, false, false, makeEmptyCommand(), GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
 }
 
-GCodeControllerResult rejectedResult(
-    const GCodeCommand& command,
-    GCodeControllerError controllerError,
-    RejectReason rejectReason = RejectReason::NONE)
-{
-    return {
-        true,
-        false,
-        false,
-        command,
-        GCodeParseError::NONE,
-        controllerError,
-        rejectReason
-    };
+GCodeControllerResult rejectedResult(const GCodeCommand& command, GCodeControllerError controllerError,
+                                     RejectReason rejectReason = RejectReason::NONE) {
+    return {true, false, false, command, GCodeParseError::NONE, controllerError, rejectReason};
 }
 
-}  // namespace
+} // namespace
 
-GCodeController::GCodeController(
-    PlotterSystem& plotterSystem,
-    HomingController& homingController,
-    const Converter& converter,
-    Encoder& encoderA,
-    Encoder& encoderB,
-    float maximumFeedrateMmPerMinute,
-    float maximumAccelerationMmPerSecondSquared)
-    : plotterSystem_(plotterSystem),
-      homingController_(homingController),
-      converter_(converter),
-      encoderA_(encoderA),
-      encoderB_(encoderB),
-      parser_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute)),
-      safetyLimits_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute)),
+GCodeController::GCodeController(PlotterSystem& plotterSystem, 
+                                 HomingController& homingController,
+                                 const Converter& converter, 
+                                 Encoder& encoderA, Encoder& encoderB, 
+                                 float xTravelMm, float yTravelMm, 
+                                 float maximumFeedrateMmPerMinute,
+                                 float maximumAccelerationMmPerSecondSquared, 
+                                 GCodePositioningMode positioningMode)
+    : plotterSystem_(plotterSystem), 
+      homingController_(homingController), 
+      converter_(converter), 
+      encoderA_(encoderA), encoderB_(encoderB), 
+      positioningMode_(positioningMode),
+      parser_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute), positioningMode_),
+      safetyLimits_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute)), 
+      xTravelMm_(xTravelMm), yTravelMm_(yTravelMm),
       maximumFeedrateMmPerMinute_(maximumFeedrateMmPerMinute),
-      maximumAccelerationMmPerSecondSquared_(
-          maximumAccelerationMmPerSecondSquared),
+      maximumAccelerationMmPerSecondSquared_(maximumAccelerationMmPerSecondSquared), 
       systemStarted_(false),
-      safetyLimitsLoaded_(false)
-{
+      safetyLimitsLoaded_(false), expectedLimitMask_(0U) {
 }
 
-void GCodeController::begin()
-{
+void GCodeController::begin() {
     systemStarted_ = false;
     safetyLimitsLoaded_ = false;
+    expectedLimitMask_ = 0U;
     parser_.resetState();
     invalidateSafetyLimits();
 }
 
-GCodeControllerResult GCodeController::processCharacter(
-    char character,
-    bool allLimitSwitchesReleased)
-{
-    const Converter::CartesianDisplacement current =
-        currentCartesianPosition();
+GCodeControllerResult GCodeController::processCharacter(char character, bool faultResetAllowed) {
+    const Converter::CartesianDisplacement current = currentCartesianPosition();
 
-    const GCodeInputResult inputResult =
-        parser_.processCharacter(
-            character,
-            current.xMm,
-            current.yMm);
+    const GCodeInputResult inputResult = parser_.processCharacter(character, current.xMm, current.yMm);
 
-    if (!inputResult.lineComplete)
-    {
+    if (!inputResult.lineComplete) {
         return waitingResult();
     }
 
-    return executeParsedResult(
-        inputResult.parseResult,
-        allLimitSwitchesReleased);
+    return executeParsedResult(inputResult.parseResult, faultResetAllowed);
 }
 
-GCodeControllerResult GCodeController::processLine(
-    const char* line,
-    bool allLimitSwitchesReleased)
-{
-    const Converter::CartesianDisplacement current =
-        currentCartesianPosition();
+GCodeControllerResult GCodeController::processLine(const char* line, bool faultResetAllowed) {
+    const Converter::CartesianDisplacement current = currentCartesianPosition();
 
-    const GCodeParseResult parseResult =
-        parser_.parseLine(
-            line,
-            current.xMm,
-            current.yMm);
+    const GCodeParseResult parseResult = parser_.parseLine(line, current.xMm, current.yMm);
 
-    return executeParsedResult(
-        parseResult,
-        allLimitSwitchesReleased);
+    return executeParsedResult(parseResult, faultResetAllowed);
 }
 
-bool GCodeController::updateAfterSystem()
-{
-    if (!systemStarted_ || safetyLimitsLoaded_)
-    {
+bool GCodeController::updateAfterSystem() {
+    if (!systemStarted_ || safetyLimitsLoaded_) {
         return false;
     }
 
-    if (plotterSystem_.state() != PlotterState::IDLE ||
-        !plotterSystem_.machineZeroKnown())
-    {
+    if (plotterSystem_.state() != PlotterState::IDLE || !plotterSystem_.machineZeroKnown()) {
         return false;
     }
 
     const HomingResult result = homingController_.result();
 
-    if (!result.xValid || !result.yValid ||
-        !(result.xTravelMm > 0.0f) ||
-        !(result.yTravelMm > 0.0f))
-    {
+    if (!result.xValid || !result.yValid || !(xTravelMm_ > 0.0f) || !(yTravelMm_ > 0.0f)) {
         return false;
     }
 
-    safetyLimits_ = {
-        0.0f,
-        result.xTravelMm,
-        0.0f,
-        result.yTravelMm,
-        maximumFeedrateMmPerMinute_
-    };
+    safetyLimits_ = {0.0f, xTravelMm_, 0.0f, yTravelMm_, maximumFeedrateMmPerMinute_};
 
-    // safetyLimitsLoaded_ = parser_.setSafetyLimits(safetyLimits_);
-    // return safetyLimitsLoaded_;
-    parser_ = GCodeParser(safetyLimits_);
+    // Reconstructing the fixed-memory parser loads the configured limits and
+    // deliberately clears any feedrate/modal state from before homing.
+    parser_ = GCodeParser(safetyLimits_, positioningMode_);
     safetyLimitsLoaded_ = true;
     return true;
 }
 
-bool GCodeController::emergencyStop(FaultCode faultCode)
-{
-    if (!systemStarted_ || faultCode == FaultCode::NONE)
-    {
+bool GCodeController::emergencyStop(FaultCode faultCode) {
+    if (!systemStarted_ || faultCode == FaultCode::NONE) {
         return false;
     }
 
     const PlotterState currentState = plotterSystem_.state();
 
-    if (currentState != PlotterState::HOMING &&
-        currentState != PlotterState::MOVING)
-    {
+    if (currentState != PlotterState::HOMING && currentState != PlotterState::MOVING) {
         return false;
     }
 
     const bool accepted = plotterSystem_.reportFault(faultCode).accepted;
 
-    if (accepted)
-    {
-        requireNewHoming();
-    }
-
     return accepted;
 }
 
-void GCodeController::requireNewHoming()
-{
+void GCodeController::requireNewHoming() {
     invalidateSafetyLimits();
 }
 
-bool GCodeController::systemStarted() const
-{
+void GCodeController::setExpectedLimitMask(uint8_t expectedLimitMask) {
+    expectedLimitMask_ = expectedLimitMask;
+}
+
+bool GCodeController::systemStarted() const {
     return systemStarted_;
 }
 
-bool GCodeController::safetyLimitsLoaded() const
-{
+bool GCodeController::safetyLimitsLoaded() const {
     return safetyLimitsLoaded_;
 }
 
-GCodeSafetyLimits GCodeController::safetyLimits() const
-{
+GCodeSafetyLimits GCodeController::safetyLimits() const {
     return safetyLimits_;
 }
 
-Converter::CartesianDisplacement
-GCodeController::currentCartesianPosition() const
-{
-    const Encoder::CountPair counts =
-        Encoder::getCountPair(encoderA_, encoderB_);
+Converter::CartesianDisplacement GCodeController::currentCartesianPosition() const {
+    const Encoder::CountPair counts = Encoder::getCountPair(encoderA_, encoderB_);
 
-    return converter_.motorToCartesianDisplacement(
-        static_cast<float>(counts.countA),
-        static_cast<float>(counts.countB));
+    return converter_.motorToCartesianDisplacement(static_cast<float>(counts.countA),
+                                                   static_cast<float>(counts.countB));
 }
 
-float GCodeController::maximumAccelerationMmPerSecondSquared() const
-{
+float GCodeController::maximumAccelerationMmPerSecondSquared() const {
     return maximumAccelerationMmPerSecondSquared_;
 }
 
-const char* GCodeController::controllerErrorMessage(
-    GCodeControllerError error)
-{
-    switch (error)
-    {
-        case GCodeControllerError::NONE:
-            return "No controller error.";
+const char* GCodeController::controllerErrorMessage(GCodeControllerError error) {
+    switch (error) {
+    case GCodeControllerError::NONE:
+        return "No controller error.";
 
-        case GCodeControllerError::PARSE_ERROR:
-            return "The G-code line was rejected by the parser.";
+    case GCodeControllerError::PARSE_ERROR:
+        return "The G-code line was rejected by the parser.";
 
-        case GCodeControllerError::SYSTEM_NOT_STARTED:
-            return "Run G28 before motion or fault-reset commands.";
+    case GCodeControllerError::SYSTEM_NOT_STARTED:
+        return "Run G28 before motion or fault-reset commands.";
 
-        case GCodeControllerError::LIMIT_SWITCH_ACTIVE:
-            return "Release all limit switches before M999.";
+    case GCodeControllerError::LIMIT_SWITCH_ACTIVE:
+        return "A non-acknowledged limit switch blocks M999.";
 
-        case GCodeControllerError::FSM_REJECTED:
-            return "The finite state machine rejected the command.";
+    case GCodeControllerError::MOVE_TOWARD_ACTIVE_LIMIT:
+        return "G01 would move toward a pressed recovery limit.";
 
-        case GCodeControllerError::INVALID_HOMING_RESULT:
-            return "Homing did not produce a valid measured workspace.";
+    case GCodeControllerError::FSM_REJECTED:
+        return "The finite state machine rejected the command.";
+
+    case GCodeControllerError::INVALID_HOMING_RESULT:
+        return "Origin homing or configured travel is invalid.";
     }
 
     return "Unknown G-code controller error.";
 }
 
-GCodeControllerResult GCodeController::executeParsedResult(
-    const GCodeParseResult& parseResult,
-    bool allLimitSwitchesReleased)
-{
-    if (!parseResult.accepted)
-    {
-        return {
-            true,
-            false,
-            false,
-            parseResult.command,
-            parseResult.error,
-            GCodeControllerError::PARSE_ERROR,
-            RejectReason::NONE
-        };
+GCodeControllerResult GCodeController::executeParsedResult(const GCodeParseResult& parseResult,
+                                                           bool faultResetAllowed) {
+    if (!parseResult.accepted) {
+        return {true,
+                false,
+                false,
+                parseResult.command,
+                parseResult.error,
+                GCodeControllerError::PARSE_ERROR,
+                RejectReason::NONE};
     }
 
     const GCodeCommand& command = parseResult.command;
 
-    if (command.type == GCodeCommandType::NONE)
-    {
-        return {
-            true,
-            true,
-            false,
-            command,
-            GCodeParseError::NONE,
-            GCodeControllerError::NONE,
-            RejectReason::NONE
-        };
+    if (command.type == GCodeCommandType::NONE) {
+        return {true, true, false, command, GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
     }
 
-    if (command.type == GCodeCommandType::HOME)
-    {
+    if (command.type == GCodeCommandType::HOME) {
         bool accepted = false;
         RejectReason rejectReason = RejectReason::NONE;
 
-        if (!systemStarted_)
-        {
+        if (!systemStarted_) {
             plotterSystem_.begin();
             systemStarted_ = true;
             accepted = plotterSystem_.state() == PlotterState::HOMING;
 
-            if (!accepted)
-            {
+            if (!accepted) {
                 rejectReason = RejectReason::UNEXPECTED_EVENT;
             }
-        }
-        else
-        {
+        } else {
             const FSMResult result = plotterSystem_.requestHoming();
             accepted = result.accepted;
             rejectReason = result.rejectReason;
         }
 
-        if (!accepted)
-        {
-            return rejectedResult(
-                command,
-                GCodeControllerError::FSM_REJECTED,
-                rejectReason);
+        if (!accepted) {
+            return rejectedResult(command, GCodeControllerError::FSM_REJECTED, rejectReason);
         }
 
         // A new home measurement invalidates the previous soft limits until
@@ -328,111 +219,70 @@ GCodeControllerResult GCodeController::executeParsedResult(
         invalidateSafetyLimits();
         parser_.commitCommand(command);
 
-        return {
-            true,
-            true,
-            false,
-            command,
-            GCodeParseError::NONE,
-            GCodeControllerError::NONE,
-            RejectReason::NONE
-        };
+        return {true, true, false, command, GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
     }
 
-    if (!systemStarted_)
-    {
-        return rejectedResult(
-            command,
-            GCodeControllerError::SYSTEM_NOT_STARTED);
+    if (!systemStarted_) {
+        return rejectedResult(command, GCodeControllerError::SYSTEM_NOT_STARTED);
     }
 
-    if (command.type == GCodeCommandType::RESET_FAULT)
-    {
-        if (!allLimitSwitchesReleased)
-        {
-            return rejectedResult(
-                command,
-                GCodeControllerError::LIMIT_SWITCH_ACTIVE);
+    if (command.type == GCodeCommandType::RESET_FAULT) {
+        if (!faultResetAllowed) {
+            return rejectedResult(command, GCodeControllerError::LIMIT_SWITCH_ACTIVE);
         }
 
         const FSMResult result = plotterSystem_.resetFault();
 
-        if (!result.accepted)
-        {
-            return rejectedResult(
-                command,
-                GCodeControllerError::FSM_REJECTED,
-                result.rejectReason);
+        if (!result.accepted) {
+            return rejectedResult(command, GCodeControllerError::FSM_REJECTED, result.rejectReason);
         }
 
         parser_.commitCommand(command);
 
-        return {
-            true,
-            true,
-            false,
-            command,
-            GCodeParseError::NONE,
-            GCodeControllerError::NONE,
-            RejectReason::NONE
-        };
+        return {true, true, false, command, GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
     }
 
     // A valid F-only line or G01 X0 Y0 changes modal state but does not need
     // to start the planner or motors.
-    if (!command.hasMovement)
-    {
+    if (!command.hasMovement) {
         parser_.commitCommand(command);
 
-        return {
-            true,
-            true,
-            false,
-            command,
-            GCodeParseError::NONE,
-            GCodeControllerError::NONE,
-            RejectReason::NONE
-        };
+        return {true, true, false, command, GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
     }
 
-    const FSMResult result =
-        plotterSystem_.requestMove(
-            // command.xDisplacementMm,
-            // command.yDisplacementMm,
-            command.xOffsetMm,
-            command.yOffsetMm,
-            command.feedrateMmPerMinute,
-            maximumAccelerationMmPerSecondSquared_);
+    if (moveWouldPressExpectedLimit(command)) {
+        return rejectedResult(command, GCodeControllerError::MOVE_TOWARD_ACTIVE_LIMIT);
+    }
 
-    if (!result.accepted)
-    {
-        return rejectedResult(
-            command,
-            GCodeControllerError::FSM_REJECTED,
-            result.rejectReason);
+    const FSMResult result = plotterSystem_.requestMove(
+        command.xOffsetMm, command.yOffsetMm, command.feedrateMmPerMinute, maximumAccelerationMmPerSecondSquared_);
+
+    if (!result.accepted) {
+        return rejectedResult(command, GCodeControllerError::FSM_REJECTED, result.rejectReason);
     }
 
     parser_.commitCommand(command);
 
-    return {
-        true,
-        true,
-        true,
-        command,
-        GCodeParseError::NONE,
-        GCodeControllerError::NONE,
-        RejectReason::NONE
-    };
+    return {true, true, true, command, GCodeParseError::NONE, GCodeControllerError::NONE, RejectReason::NONE};
 }
 
-void GCodeController::invalidateSafetyLimits()
-{
-    safetyLimits_ =
-        makeInvalidSafetyLimits(maximumFeedrateMmPerMinute_);
+bool GCodeController::moveWouldPressExpectedLimit(const GCodeCommand& command) const {
+    const uint8_t xMinimumMask = static_cast<uint8_t>(1U << static_cast<uint8_t>(ExpectedSwitch::X_MIN));
+    const uint8_t xMaximumMask = static_cast<uint8_t>(1U << static_cast<uint8_t>(ExpectedSwitch::X_MAX));
+    const uint8_t yMinimumMask = static_cast<uint8_t>(1U << static_cast<uint8_t>(ExpectedSwitch::Y_MIN));
+    const uint8_t yMaximumMask = static_cast<uint8_t>(1U << static_cast<uint8_t>(ExpectedSwitch::Y_MAX));
 
-    // parser_.setSafetyLimits(safetyLimits_);
-    parser_ = GCodeParser(safetyLimits_);
+    return ((expectedLimitMask_ & xMinimumMask) != 0U && command.xOffsetMm < 0.0f) ||
+           ((expectedLimitMask_ & xMaximumMask) != 0U && command.xOffsetMm > 0.0f) ||
+           ((expectedLimitMask_ & yMinimumMask) != 0U && command.yOffsetMm < 0.0f) ||
+           ((expectedLimitMask_ & yMaximumMask) != 0U && command.yOffsetMm > 0.0f);
+}
+
+void GCodeController::invalidateSafetyLimits() {
+    safetyLimits_ = makeInvalidSafetyLimits(maximumFeedrateMmPerMinute_);
+
+    parser_ = GCodeParser(safetyLimits_, positioningMode_);
     safetyLimitsLoaded_ = false;
 }
 
-}  // namespace plotter
+} // namespace plotter

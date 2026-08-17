@@ -4,33 +4,25 @@
 
 #include "config/SystemConfig.h"
 
-namespace plotter
-{
+namespace plotter {
 
-namespace
-{
+namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 }
 
-PlotterSystem::PlotterSystem(
-    AxisController& axisA,
-    AxisController& axisB,
-    XYCoordinator& xyCoordinator,
-    TrajectoryPlanner& trajectoryPlanner,
-    HomingController& homingController)
-    : axisA_(axisA),
-      axisB_(axisB),
-      xyCoordinator_(xyCoordinator),
+PlotterSystem::PlotterSystem(AxisController& axisA, AxisController& axisB, 
+                             XYCoordinator& xyCoordinator,
+                             TrajectoryPlanner& trajectoryPlanner, 
+                             HomingController& homingController)
+    : axisA_(axisA), axisB_(axisB), 
+      xyCoordinator_(xyCoordinator), 
       trajectoryPlanner_(trajectoryPlanner),
-      homingController_(homingController),
-      pendingXDisplacementMm_(0.0f),
-      pendingYDisplacementMm_(0.0f),
-      pendingFeedrateMmPerMinute_(0.0f),
-      pendingAccelerationMmPerSecondSquared_(0.0f),
+      homingController_(homingController), 
+      pendingXDisplacementMm_(0.0f), pendingYDisplacementMm_(0.0f),
+      pendingFeedrateMmPerMinute_(0.0f), 
+      pendingAccelerationMmPerSecondSquared_(0.0f), 
       lastTrajectoryUpdateMicros_(0),
-      moveSettling_(false),
-      moveSettlingStartMicros_(0)
-{
+      moveSettling_(false), moveSettlingStartMicros_(0) {
 }
 
 void PlotterSystem::begin() {
@@ -47,20 +39,20 @@ void PlotterSystem::begin() {
 
 void PlotterSystem::update() {
     switch (fsm_.state()) {
-        case PlotterState::IDLE:
-            break;
+    case PlotterState::IDLE:
+        break;
 
-        case PlotterState::HOMING:
-            updateHoming();
-            break;
+    case PlotterState::HOMING:
+        updateHoming();
+        break;
 
-        case PlotterState::MOVING:
-            updateMoving();
-            break;
+    case PlotterState::MOVING:
+        updateMoving();
+        break;
 
-        case PlotterState::FAULT:
-            // ENTER_FAULT already stopped all motion.
-            break;
+    case PlotterState::FAULT:
+        // ENTER_FAULT already stopped all motion.
+        break;
     }
 }
 
@@ -68,22 +60,13 @@ FSMResult PlotterSystem::requestHoming() {
     return dispatchAndExecute(FSMEventType::HOMING_REQUESTED);
 }
 
-FSMResult PlotterSystem::requestMove(
-    float xDisplacementMm,
-    float yDisplacementMm,
-    float feedrateMmPerMinute,
-    float maxAccelerationMmPerSecondSquared) {
+FSMResult PlotterSystem::requestMove(float xDisplacementMm, float yDisplacementMm, float feedrateMmPerMinute,
+                                     float maxAccelerationMmPerSecondSquared) {
     // Using !(value > 0) also rejects NaN.
     if (!(feedrateMmPerMinute > 0.0f) || !(maxAccelerationMmPerSecondSquared > 0.0f)) {
         const PlotterState currentState = fsm_.state();
 
-        return {
-            false,
-            currentState,
-            currentState,
-            PlotterAction::NONE,
-            RejectReason::INVALID_MOTION_PARAMETERS
-        };
+        return {false, currentState, currentState, PlotterAction::NONE, RejectReason::INVALID_MOTION_PARAMETERS};
     }
 
     const FSMResult result = fsm_.dispatch(FSMEventType::MOVE_REQUESTED);
@@ -107,7 +90,7 @@ FSMResult PlotterSystem::requestMove(
 }
 
 FSMResult PlotterSystem::reportFault(FaultCode faultCode) {
-    return dispatchAndExecute( FSMEventType::FAULT_DETECTED, faultCode);
+    return dispatchAndExecute(FSMEventType::FAULT_DETECTED, faultCode);
 }
 
 FSMResult PlotterSystem::resetFault() {
@@ -138,74 +121,66 @@ FSMResult PlotterSystem::dispatchAndExecute(FSMEventType event, FaultCode faultC
 
 void PlotterSystem::executeAction(PlotterAction action) {
     switch (action) {
-        case PlotterAction::NONE:
-            break;
+    case PlotterAction::NONE:
+        break;
 
-        case PlotterAction::START_HOMING:
-            stopAllMotion();
+    case PlotterAction::START_HOMING:
+        stopAllMotion();
 
-            if (!homingController_.start()) {
-                reportFault(mapHomingFault(homingController_.fault()));
-            }
-            break;
+        if (!homingController_.start()) {
+            reportFault(mapHomingFault(homingController_.fault()));
+        }
+        break;
 
-        case PlotterAction::START_MOVING:
-        {
-            moveSettling_ = false;
+    case PlotterAction::START_MOVING: {
+        moveSettling_ = false;
 
-            // Because the planner now outputs displacement relative to
-            // the current move, it can use (0, 0) as its local start.
-            const bool trajectoryStarted =
-                trajectoryPlanner_.startMove(
-                    0.0f,
-                    0.0f,
-                    pendingXDisplacementMm_,
-                    pendingYDisplacementMm_,
-                    pendingFeedrateMmPerMinute_,
-                    pendingAccelerationMmPerSecondSquared_);
+        // Because the planner now outputs displacement relative to
+        // the current move, it can use (0, 0) as its local start.
+        const bool trajectoryStarted =
+            trajectoryPlanner_.startMove(0.0f, 0.0f, pendingXDisplacementMm_, pendingYDisplacementMm_,
+                                         pendingFeedrateMmPerMinute_, pendingAccelerationMmPerSecondSquared_);
 
-            if (!trajectoryStarted) {
-                // Parameters were already validated, so failure here
-                // indicates an internal inconsistency.
-                reportFault(FaultCode::INTERNAL_ERROR);
-
-                break;
-            }
-
-            // Capture one synchronized A/B encoder snapshot and use it
-            // as the origin of this move.
-            xyCoordinator_.startMove();
-
-            lastTrajectoryUpdateMicros_ = micros();
-
-            // Apply the initial zero-displacement reference.
-            const TrajectoryReference initialReference = trajectoryPlanner_.update(0.0f);
-
-            xyCoordinator_.setCartesianReference(
-                initialReference.xDisplacementMm,
-                initialReference.yDisplacementMm,
-                initialReference.xVelocityMmPerSecond,
-                initialReference.yVelocityMmPerSecond);
+        if (!trajectoryStarted) {
+            // Parameters were already validated, so failure here
+            // indicates an internal inconsistency.
+            reportFault(FaultCode::INTERNAL_ERROR);
 
             break;
         }
 
-        case PlotterAction::FINISH_HOMING:
-            trajectoryPlanner_.stop();
-            homingController_.stop();
+        // Capture one synchronized A/B encoder snapshot and use it
+        // as the origin of this move.
+        xyCoordinator_.startMove();
 
-            // HomingController has set both encoder counts to zero
-            // Re-synchronise both motor-space controllers to that zero
-            xyCoordinator_.reset();
+        lastTrajectoryUpdateMicros_ = micros();
 
-            moveSettling_ = false;
-            break;
+        // Apply the initial zero-displacement reference.
+        const TrajectoryReference initialReference = trajectoryPlanner_.update(0.0f);
 
-        case PlotterAction::FINISH_MOVING:
-        case PlotterAction::ENTER_FAULT:
-        case PlotterAction::CLEAR_FAULT:
-            stopAllMotion();
-            break;
+        xyCoordinator_.setCartesianReference(initialReference.xDisplacementMm, initialReference.yDisplacementMm,
+                                             initialReference.xVelocityMmPerSecond,
+                                             initialReference.yVelocityMmPerSecond);
+
+        break;
+    }
+
+    case PlotterAction::FINISH_HOMING:
+        trajectoryPlanner_.stop();
+        homingController_.stop();
+
+        // HomingController has set both encoder counts to zero
+        // Re-synchronise both motor-space controllers to that zero
+        xyCoordinator_.reset();
+
+        moveSettling_ = false;
+        break;
+
+    case PlotterAction::FINISH_MOVING:
+    case PlotterAction::ENTER_FAULT:
+    case PlotterAction::CLEAR_FAULT:
+        stopAllMotion();
+        break;
     }
 }
 
@@ -225,23 +200,17 @@ void PlotterSystem::updateHoming() {
 void PlotterSystem::updateMoving() {
     const unsigned long currentTimeMicros = micros();
 
-    const unsigned long elapsedMicros =
-        currentTimeMicros - lastTrajectoryUpdateMicros_;
+    const unsigned long elapsedMicros = currentTimeMicros - lastTrajectoryUpdateMicros_;
 
     if (elapsedMicros > 0) {
         lastTrajectoryUpdateMicros_ = currentTimeMicros;
 
-        const float timeStepSeconds =
-            static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
+        const float timeStepSeconds = static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
 
-        const TrajectoryReference reference =
-            trajectoryPlanner_.update(timeStepSeconds);
+        const TrajectoryReference reference = trajectoryPlanner_.update(timeStepSeconds);
 
-        xyCoordinator_.setCartesianReference(
-            reference.xDisplacementMm,
-            reference.yDisplacementMm,
-            reference.xVelocityMmPerSecond,
-            reference.yVelocityMmPerSecond);
+        xyCoordinator_.setCartesianReference(reference.xDisplacementMm, reference.yDisplacementMm,
+                                             reference.xVelocityMmPerSecond, reference.yVelocityMmPerSecond);
     }
 
     // XYCoordinator performs one synchronized encoder snapshot and
@@ -268,8 +237,7 @@ void PlotterSystem::updateMoving() {
         return;
     }
 
-    const unsigned long settledTimeMicros =
-        currentTimeMicros - moveSettlingStartMicros_;
+    const unsigned long settledTimeMicros = currentTimeMicros - moveSettlingStartMicros_;
 
     if (settledTimeMicros >= SystemConfig::MOVE_SETTLE_TIME_MICROS) {
         dispatchAndExecute(FSMEventType::MOVE_COMPLETED);
@@ -285,21 +253,21 @@ void PlotterSystem::stopAllMotion() {
 
 FaultCode PlotterSystem::mapHomingFault(HomingFault fault) {
     switch (fault) {
-        case HomingFault::TIMEOUT:
-            return FaultCode::HOMING_TIMEOUT;
+    case HomingFault::TIMEOUT:
+        return FaultCode::HOMING_TIMEOUT;
 
-        case HomingFault::WRONG_LIMIT:
-            return FaultCode::WRONG_HOMING_LIMIT;
-        
-        case HomingFault::CONTRADICTORY_LIMITS:
-            return FaultCode::CONTRADICTORY_LIMITS;
+    case HomingFault::WRONG_LIMIT:
+        return FaultCode::WRONG_HOMING_LIMIT;
 
-        case HomingFault::INVALID_CONFIGURATION:
-        case HomingFault::NONE:
-            return FaultCode::INTERNAL_ERROR;
+    case HomingFault::CONTRADICTORY_LIMITS:
+        return FaultCode::CONTRADICTORY_LIMITS;
+
+    case HomingFault::INVALID_CONFIGURATION:
+    case HomingFault::NONE:
+        return FaultCode::INTERNAL_ERROR;
     }
 
     return FaultCode::INTERNAL_ERROR;
 }
 
-}  // namespace plotter
+} // namespace plotter

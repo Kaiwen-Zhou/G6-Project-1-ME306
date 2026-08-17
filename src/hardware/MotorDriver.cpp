@@ -2,23 +2,16 @@
 #include "config/PinConfig.h"
 
 // Constructor
-MotorDriver::MotorDriver(uint8_t directionPin,
-                         uint8_t pwmPin,
-                         bool directionInverted,
-                         uint8_t outputLimit)
-    : directionPin_(directionPin),
-      pwmPin_(pwmPin),
-      directionInverted_(directionInverted),
-      outputLimit_(outputLimit),
-      currentOutput_(0)
-{
+MotorDriver::MotorDriver(uint8_t directionPin, uint8_t pwmPin, bool directionInverted, uint8_t outputLimit)
+    : directionPin_(directionPin), pwmPin_(pwmPin), directionInverted_(directionInverted), outputLimit_(outputLimit),
+      currentOutput_(0) {
 }
 
 // Initialise the motor driver hardware
 void MotorDriver::begin() {
     pinMode(directionPin_, OUTPUT);
     pinMode(pwmPin_, OUTPUT);
-    
+
     // set a known initial direction level
     digitalWrite(directionPin_, LOW);
 
@@ -32,8 +25,7 @@ void MotorDriver::setOutput(int16_t command) {
     // limit the command to the configured output range
     if (command > limit) {
         command = limit;
-    }
-    else if (command < -limit) {
+    } else if (command < -limit) {
         command = -limit;
     }
 
@@ -54,14 +46,13 @@ void MotorDriver::setOutput(int16_t command) {
     bool directionLevel = positiveCommand != directionInverted_;
 
     digitalWrite(directionPin_, directionLevel ? HIGH : LOW);
-    
+
     // PWM output uses only the command magnitude
     uint8_t pwmValue;
 
     if (positiveCommand) {
         pwmValue = static_cast<uint8_t>(command);
-    }
-    else {
+    } else {
         pwmValue = static_cast<uint8_t>(-command);
     }
 
@@ -69,7 +60,7 @@ void MotorDriver::setOutput(int16_t command) {
 
     // store the logical signed command actually applied
     currentOutput_ = command;
-} 
+}
 
 // Immediately stop motor output using coast behaviour
 void MotorDriver::stop() {

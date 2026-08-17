@@ -17,116 +17,121 @@
  *   - read one complete G-code line through GCodeParser;
  *   - pass G01, G28 and M999 to the correct PlotterSystem function;
  *   - commit parser inheritance only after the system accepts a command;
- *   - load measured X/Y soft limits after successful homing.
+ *   - load configured X/Y soft limits after successful origin homing.
  *
  * This class does not read Serial, drive motors, update the control loop, or
  * decide whether a physical limit switch is released. Those remain main-loop
  * responsibilities so the class can also be tested on a computer.
  */
 
-namespace plotter
-{
+namespace plotter {
 
-enum class GCodeControllerError : uint8_t
-{
+enum class GCodeControllerError : uint8_t {
     NONE,
     PARSE_ERROR,
     SYSTEM_NOT_STARTED,
     LIMIT_SWITCH_ACTIVE,
+    MOVE_TOWARD_ACTIVE_LIMIT,
     FSM_REJECTED,
     INVALID_HOMING_RESULT
 };
 
-struct GCodeControllerResult
-{
-    // False while processCharacter() is still waiting for CR or LF.
-    bool lineComplete;
+struct GCodeControllerResult {
+        // False while processCharacter() is still waiting for CR or LF.
+        bool lineComplete;
 
-    // True only when the complete command was accepted.
-    bool accepted;
+        // True only when the complete command was accepted.
+        bool accepted;
 
-    // True only when a non-zero G01 started physical motion.
-    bool movementStarted;
+        // True only when a non-zero G01 started physical motion.
+        bool movementStarted;
 
-    GCodeCommand command;
-    GCodeParseError parseError;
-    GCodeControllerError controllerError;
-    RejectReason rejectReason;
+        GCodeCommand command;
+        GCodeParseError parseError;
+        GCodeControllerError controllerError;
+        RejectReason rejectReason;
 };
 
-class GCodeController
-{
-public:
-    GCodeController(
-        PlotterSystem& plotterSystem,
-        HomingController& homingController,
-        const Converter& converter,
-        Encoder& encoderA,
-        Encoder& encoderB,
-        float maximumFeedrateMmPerMinute,
-        float maximumAccelerationMmPerSecondSquared);
+class GCodeController {
+    public:
+        GCodeController(PlotterSystem& plotterSystem, 
+                        HomingController& homingController, 
+                        const Converter& converter,
+                        Encoder& encoderA, 
+                        Encoder& encoderB,
+                        float xTravelMm, 
+                        float yTravelMm,
+                        float maximumFeedrateMmPerMinute, 
+                        float maximumAccelerationMmPerSecondSquared,
+                        GCodePositioningMode positioningMode);
 
-    // Reset communication state. This deliberately does not initialise or
-    // start PlotterSystem; the first accepted G28 does that.
-    void begin();
+        // Reset communication state. This deliberately does not initialise or
+        // start PlotterSystem; the application starts it through G28.
+        void begin();
 
-    // Non-blocking serial-input path. Call once for every received character.
-    // allLimitSwitchesReleased is used only by the external M999 reset policy.
-    GCodeControllerResult processCharacter(
-        char character,
-        bool allLimitSwitchesReleased);
+        // Non-blocking serial-input path. Call once for every received character.
+        // faultResetAllowed is decided by the application's switch-recovery
+        // policy and is used only for M999.
+        GCodeControllerResult processCharacter(char character, bool faultResetAllowed);
 
-    // Complete-line path for tests and applications that already own a line
-    // buffer. The line must be null terminated and must not include CR/LF.
-    GCodeControllerResult processLine(
-        const char* line,
-        bool allLimitSwitchesReleased);
+        // Complete-line path for tests and applications that already own a line
+        // buffer. The line must be null terminated and must not include CR/LF.
+        GCodeControllerResult processLine(const char* line, bool faultResetAllowed);
 
-    // Call after PlotterSystem::update(). When homing has completed, this
-    // loads the newly measured workspace into GCodeParser.
-    // Returns true only on the update that successfully loads new limits.
-    bool updateAfterSystem();
+        // Call after PlotterSystem::update(). When origin homing has completed,
+        // this loads the configured min-to-max travel into GCodeParser.
+        // Returns true only on the update that successfully loads new limits.
+        bool updateAfterSystem();
 
-    // Stop an active HOMING or MOVING operation through the normal FAULT path.
-    // Returns true when a new fault was reported.
-    bool emergencyStop(FaultCode faultCode = FaultCode::INTERNAL_ERROR);
+        // Stop an active HOMING or MOVING operation through the normal FAULT path.
+        // Returns true when a new fault was reported.
+        bool emergencyStop(FaultCode faultCode = FaultCode::INTERNAL_ERROR);
 
-    // Invalidate the measured workspace after any fault that could make the
-    // Cartesian position uncertain. M999 may clear the FSM fault, but G01
-    // remains blocked until a complete G28 loads a new measurement.
-    void requireNewHoming();
+        // Explicitly invalidate the configured workspace when a caller knows the
+        // coordinate reference is no longer trustworthy. Ordinary FAULT/M999
+        // recovery deliberately preserves machine zero and the loaded soft limits.
+        void requireNewHoming();
 
-    bool systemStarted() const;
-    bool safetyLimitsLoaded() const;
+        // Supply the application-layer recovery exemption. Bit positions follow
+        // ExpectedSwitch: X_MIN=0, X_MAX=1, Y_MIN=2, Y_MAX=3. This affects only
+        // G01 direction validation; ordinary Cartesian soft limits still apply.
+        void setExpectedLimitMask(uint8_t expectedLimitMask);
 
-    GCodeSafetyLimits safetyLimits() const;
-    Converter::CartesianDisplacement currentCartesianPosition() const;
+        bool systemStarted() const;
+        bool safetyLimitsLoaded() const;
 
-    float maximumAccelerationMmPerSecondSquared() const;
+        GCodeSafetyLimits safetyLimits() const;
+        Converter::CartesianDisplacement currentCartesianPosition() const;
 
-    static const char* controllerErrorMessage(GCodeControllerError error);
+        float maximumAccelerationMmPerSecondSquared() const;
 
-private:
-    GCodeControllerResult executeParsedResult(
-        const GCodeParseResult& parseResult,
-        bool allLimitSwitchesReleased);
+        static const char* controllerErrorMessage(GCodeControllerError error);
 
-    void invalidateSafetyLimits();
+    private:
+        GCodeControllerResult executeParsedResult(const GCodeParseResult& parseResult, bool faultResetAllowed);
 
-    PlotterSystem& plotterSystem_;
-    HomingController& homingController_;
-    const Converter& converter_;
-    Encoder& encoderA_;
-    Encoder& encoderB_;
+        bool moveWouldPressExpectedLimit(const GCodeCommand& command) const;
 
-    GCodeParser parser_;
-    GCodeSafetyLimits safetyLimits_;
+        void invalidateSafetyLimits();
 
-    float maximumFeedrateMmPerMinute_;
-    float maximumAccelerationMmPerSecondSquared_;
+        PlotterSystem& plotterSystem_;
+        HomingController& homingController_;
+        const Converter& converter_;
+        Encoder& encoderA_;
+        Encoder& encoderB_;
 
-    bool systemStarted_;
-    bool safetyLimitsLoaded_;
+        GCodePositioningMode positioningMode_;
+        GCodeParser parser_;
+        GCodeSafetyLimits safetyLimits_;
+
+        float xTravelMm_;
+        float yTravelMm_;
+        float maximumFeedrateMmPerMinute_;
+        float maximumAccelerationMmPerSecondSquared_;
+
+        bool systemStarted_;
+        bool safetyLimitsLoaded_;
+        uint8_t expectedLimitMask_;
 };
 
-}  // namespace plotter
+} // namespace plotter

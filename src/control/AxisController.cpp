@@ -2,48 +2,41 @@
 
 #include <Arduino.h>
 
-namespace
-{
+namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 
-float makeNonNegative(float value){
+float makeNonNegative(float value) {
     return value < 0.0f ? -value : value;
 }
-}
+} // namespace
 
 AxisController::AxisController(PIDController& pidController, MotorDriver& motor, float positionTolerance)
-    : legacyEncoder_(nullptr),
-      pidController_(pidController),
+    : legacyEncoder_(nullptr), 
+      pidController_(pidController), 
       motor_(motor),
-      positionTolerance_(makeNonNegative(positionTolerance)),
+      positionTolerance_(makeNonNegative(positionTolerance)), 
       legacyUpdateIntervalMicros_(0),
-      legacyLastUpdateMicros_(0),
-      referencePosition_(0.0f),
-      referenceVelocity_(0.0f),
+      legacyLastUpdateMicros_(0), 
+      referencePosition_(0.0f), 
+      referenceVelocity_(0.0f), 
       currentPosition_(0),
-      trackingError_(0.0f),
-      active_(false)
-{
+      trackingError_(0.0f), 
+      active_(false) {
 }
 
-AxisController::AxisController(
-    Encoder& encoder,
-    PIDController& pidController,
-    MotorDriver& motor,
-    int32_t positionTolerance,
-    unsigned long updateIntervalMicros)
-    : legacyEncoder_(&encoder),
-      pidController_(pidController),
+AxisController::AxisController(Encoder& encoder, PIDController& pidController, MotorDriver& motor,
+                               int32_t positionTolerance, unsigned long updateIntervalMicros)
+    : legacyEncoder_(&encoder), 
+      pidController_(pidController), 
       motor_(motor),
       positionTolerance_(makeNonNegative(static_cast<float>(positionTolerance))),
-      legacyUpdateIntervalMicros_(updateIntervalMicros),
-      legacyLastUpdateMicros_(0),
+      legacyUpdateIntervalMicros_(updateIntervalMicros), 
+      legacyLastUpdateMicros_(0), 
       referencePosition_(0.0f),
-      referenceVelocity_(0.0f),
-      currentPosition_(0),
-      trackingError_(0.0f),
-      active_(false)
-{
+      referenceVelocity_(0.0f), 
+      currentPosition_(0), 
+      trackingError_(0.0f), 
+      active_(false) {
 }
 
 void AxisController::begin() {
@@ -100,11 +93,11 @@ void AxisController::setReference(float referencePosition, float referenceVeloci
     trackingError_ = referencePosition_ - static_cast<float>(currentPosition_);
 }
 
-void AxisController::setReferencePosition( int32_t referencePosition) {
-    setReference( static_cast<float>(referencePosition), 0.0f);
+void AxisController::setReferencePosition(int32_t referencePosition) {
+    setReference(static_cast<float>(referencePosition), 0.0f);
 }
 
-void AxisController::update( int32_t currentPosition, float timeStepSeconds) {
+void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
     currentPosition_ = currentPosition;
 
     trackingError_ = referencePosition_ - static_cast<float>(currentPosition_);
@@ -119,8 +112,7 @@ void AxisController::update( int32_t currentPosition, float timeStepSeconds) {
         return;
     }
 
-    const float controllerOutput =
-        pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
+    const float controllerOutput = pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
 
     motor_.setOutput(convertToMotorCommand(controllerOutput));
 }
@@ -132,8 +124,7 @@ void AxisController::update() {
 
     const unsigned long currentTimeMicros = micros();
 
-    const unsigned long elapsedMicros =
-        currentTimeMicros - legacyLastUpdateMicros_;
+    const unsigned long elapsedMicros = currentTimeMicros - legacyLastUpdateMicros_;
 
     if (elapsedMicros < legacyUpdateIntervalMicros_) {
         return;
@@ -145,8 +136,7 @@ void AxisController::update() {
 
     legacyLastUpdateMicros_ = currentTimeMicros;
 
-    const float timeStepSeconds =
-        static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
+    const float timeStepSeconds = static_cast<float>(elapsedMicros) * MICROSECONDS_TO_SECONDS;
 
     update(legacyEncoder_->getCount(), timeStepSeconds);
 }
@@ -191,16 +181,10 @@ bool AxisController::isWithinTolerance() const {
 }
 
 AxisTelemetry AxisController::getTelemetry() const {
-    return AxisTelemetry{
-        referencePosition_,
-        referenceVelocity_,
-        currentPosition_,
-        trackingError_,
-        motor_.getOutput(),
-        pidController_.getIntegralOutput(),
-        isWithinTolerance(),
-        active_
-    };
+    return AxisTelemetry{referencePosition_,  referenceVelocity_,
+                         currentPosition_,    trackingError_,
+                         motor_.getOutput(),  pidController_.getIntegralOutput(),
+                         isWithinTolerance(), active_};
 }
 
 bool AxisController::isErrorWithinTolerance(float error) const {
@@ -211,8 +195,7 @@ bool AxisController::isErrorWithinTolerance(float error) const {
     return error <= positionTolerance_;
 }
 
-int16_t AxisController::convertToMotorCommand(float controllerOutput) const
-{
+int16_t AxisController::convertToMotorCommand(float controllerOutput) const {
     // Defensive limits before conversion to int16_t.
     if (controllerOutput >= 32767.0f) {
         return 32767;
