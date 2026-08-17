@@ -21,12 +21,14 @@ LimitSafetyManager::LimitSafetyManager(LimitSwitch& leftLimit, LimitSwitch& righ
       plotterSystem_(plotterSystem), 
       recoverableLimitMask_(0U),
       expectedLimitMask_(0U), 
+      pendingInterruptMask_(0U),
       lastResetBlockingLimitMask_(0U), lastSafetyCheckMs_(0UL) {
 }
 
 void LimitSafetyManager::begin() {
     recoverableLimitMask_ = 0U;
     expectedLimitMask_ = 0U;
+    pendingInterruptMask_ = 0U;
     lastResetBlockingLimitMask_ = 0U;
     lastSafetyCheckMs_ = 0UL;
     gCodeController_.setExpectedLimitMask(0U);
@@ -37,6 +39,28 @@ void LimitSafetyManager::updateSwitches() {
     rightLimit_.update();
     bottomLimit_.update();
     topLimit_.update();
+}
+
+LimitSafetyUpdate LimitSafetyManager::handleLimitInterrupts(uint8_t interruptMask) {
+    if (interruptMask == 0U || !gCodeController_.systemStarted()) {
+        return emptyUpdate();
+    }
+
+    const PlotterState state = plotterSystem_.state();
+
+    if (state == PlotterState::HOMING || state == PlotterState::FAULT) {
+        return emptyUpdate();
+    }
+
+    const uint8_t unexpectedMask =
+        static_cast<uint8_t>(interruptMask & static_cast<uint8_t>(~expectedLimitMask_));
+
+    if (unexpectedMask == 0U) {
+        return emptyUpdate();
+    }
+
+    pendingInterruptMask_ |= unexpectedMask;
+    return emptyUpdate();
 }
 
 LimitSafetyUpdate LimitSafetyManager::update() {
@@ -50,6 +74,12 @@ LimitSafetyUpdate LimitSafetyManager::update() {
 
     if (state == PlotterState::HOMING || state == PlotterState::FAULT) {
         return result;
+    }
+
+    const uint8_t confirmedInterruptMask = collectConfirmedInterrupts();
+
+    if (confirmedInterruptMask != 0U) {
+        return enterUnexpectedLimitFault(confirmedInterruptMask);
     }
 
     const unsigned long currentTimeMs = millis();
@@ -69,6 +99,34 @@ LimitSafetyUpdate LimitSafetyManager::update() {
     if (unexpectedMask == 0U) {
         return result;
     }
+
+    return enterUnexpectedLimitFault(unexpectedMask);
+}
+
+uint8_t LimitSafetyManager::collectConfirmedInterrupts() {
+    const uint8_t masks[] = {LEFT_LIMIT_MASK, RIGHT_LIMIT_MASK, BOTTOM_LIMIT_MASK, TOP_LIMIT_MASK};
+    LimitSwitch* switches[] = {&leftLimit_, &rightLimit_, &bottomLimit_, &topLimit_};
+    uint8_t confirmedMask = 0U;
+
+    for (uint8_t index = 0; index < 4U; ++index) {
+        const uint8_t mask = masks[index];
+
+        if ((pendingInterruptMask_ & mask) == 0U || switches[index]->isInterruptVerificationPending()) {
+            continue;
+        }
+
+        pendingInterruptMask_ &= static_cast<uint8_t>(~mask);
+
+        if (switches[index]->isPressed() && (expectedLimitMask_ & mask) == 0U) {
+            confirmedMask |= mask;
+        }
+    }
+
+    return confirmedMask;
+}
+
+LimitSafetyUpdate LimitSafetyManager::enterUnexpectedLimitFault(uint8_t unexpectedMask) {
+    LimitSafetyUpdate result = emptyUpdate();
 
     const uint8_t boundaryMask = classifyRecoverableBoundaryLimits(unexpectedMask);
     const Converter::CartesianDisplacement position = gCodeController_.currentCartesianPosition();
@@ -106,12 +164,14 @@ void LimitSafetyManager::armRecoverableLimitsAfterReset() {
 void LimitSafetyManager::clearForHoming() {
     recoverableLimitMask_ = 0U;
     expectedLimitMask_ = 0U;
+    pendingInterruptMask_ = 0U;
     lastResetBlockingLimitMask_ = 0U;
     gCodeController_.setExpectedLimitMask(0U);
 }
 
 void LimitSafetyManager::clearRecoverableFaultAttribution() {
     recoverableLimitMask_ = 0U;
+    pendingInterruptMask_ = 0U;
     lastResetBlockingLimitMask_ = 0U;
 }
 

@@ -39,8 +39,12 @@ class LimitSafetyManager {
         // its own debounce state machine.
         void updateSwitches();
 
-        // Low-rate normal-operation safety check. It may report an
-        // UNEXPECTED_LIMIT fault through PlotterSystem.
+        // Fast path for the switch mask latched by the limit ISRs. Unexpected
+        // edges become candidates until their debounce verification completes.
+        LimitSafetyUpdate handleLimitInterrupts(uint8_t interruptMask);
+
+        // Low-rate debounced safety backup. It may report an UNEXPECTED_LIMIT
+        // fault through PlotterSystem if an interrupt was missed.
         LimitSafetyUpdate update();
 
         // M999 policy: all currently pressed switches must already be expected or
@@ -60,6 +64,8 @@ class LimitSafetyManager {
         uint8_t resetBlockingMask() const;
 
     private:
+        LimitSafetyUpdate enterUnexpectedLimitFault(uint8_t unexpectedMask);
+        uint8_t collectConfirmedInterrupts();
         uint8_t unexpectedPressedMask() const;
         uint8_t classifyRecoverableBoundaryLimits(uint8_t candidateMask) const;
         uint8_t clearReleasedExpectedLimitsDuringMove();
@@ -73,6 +79,7 @@ class LimitSafetyManager {
 
         uint8_t recoverableLimitMask_;
         uint8_t expectedLimitMask_;
+        uint8_t pendingInterruptMask_;
         uint8_t lastResetBlockingLimitMask_;
         unsigned long lastSafetyCheckMs_;
 };

@@ -45,6 +45,11 @@ void LimitSwitch::notifyFromISR() {
     interruptPending = true;
 }
 
+// Returns true while an ISR-triggered rising edge is awaiting debounce verification.
+bool LimitSwitch::isInterruptVerificationPending() const {
+    return interruptPending || verificationActive;
+}
+
 // Update switch state with software debouncing.
 void LimitSwitch::update() {
     // Read the current raw input
