@@ -13,8 +13,8 @@ Converter::MotorReference Converter::cartesianToMotorReference(float xDisplaceme
     // Verified machine mapping after accounting for the physical axis swap
     // and the required software Y-direction inversion:
     //
-    // A =  X - Y
-    // B = -X - Y
+    // A =  X + Y
+    // B = X - Y
 
     const float aDisplacementMm = xDisplacementMm + yDisplacementMm;
     const float bDisplacementMm = xDisplacementMm - yDisplacementMm;
@@ -39,10 +39,10 @@ Converter::CartesianDisplacement Converter::motorToCartesianDisplacement(float a
 
     const float bDisplacementMm = bDisplacementCounts * motorBMmPerCount_ * motorBCoordinateSign_;
 
-    // Inverse of A = X - Y and B = X - Y:
+    // Inverse of A = X + Y and B = X - Y:
     //
-    // X =  (A - B) / 2
-    // Y = (A + B) / 2
+    // X =  (A + B) / 2
+    // Y = (A - B) / 2
 
     const float xDisplacementMm =
         0.5f * (aDisplacementMm + bDisplacementMm);

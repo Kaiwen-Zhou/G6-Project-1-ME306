@@ -35,7 +35,7 @@ constexpr float MOTOR_B_MM_PER_COUNT =
 // +1: positive raw count is positive A/B displacement.
 // -1: positive raw count is negative A/B displacement.
 constexpr int8_t MOTOR_A_COORDINATE_SIGN = 1;
-constexpr int8_t MOTOR_B_COORDINATE_SIGN = 1;
+constexpr int8_t MOTOR_B_COORDINATE_SIGN = -1;
 
 constexpr unsigned long MOTION_CONTROL_PERIOD_MICROS = 5000UL;
 constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
@@ -44,8 +44,8 @@ constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 150.0f; ////////////// TODO: measured X min-to-max travel
-constexpr float MACHINE_Y_TRAVEL_MM = 200.0f; ////////////// TODO: measured Y min-to-max travel
+constexpr float MACHINE_X_TRAVEL_MM = 210.0f; ////////////// TODO: measured X min-to-max travel
+constexpr float MACHINE_Y_TRAVEL_MM = 150.0f; ////////////// TODO: measured Y min-to-max travel
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
@@ -76,6 +76,6 @@ constexpr unsigned long HOMING_OVERALL_TIMEOUT_MS = 180000UL;
 // false: stop on the ISR edge and accept it immediately during homing.
 constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = false;
 // Temporary values until hardware direction testing.
-constexpr bool MOTOR_1_DIRECTION_INVERTED = false;
-constexpr bool MOTOR_2_DIRECTION_INVERTED = false;
+constexpr bool MOTOR_1_DIRECTION_INVERTED = true;
+constexpr bool MOTOR_2_DIRECTION_INVERTED = true;
 } // namespace SystemConfig
