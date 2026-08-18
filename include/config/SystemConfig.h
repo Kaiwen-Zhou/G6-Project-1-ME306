@@ -44,13 +44,13 @@ constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 250.0f; ////////////// TODO: measured X min-to-max travel
-constexpr float MACHINE_Y_TRAVEL_MM = 250.0f; ////////////// TODO: measured Y min-to-max travel
+constexpr float MACHINE_X_TRAVEL_MM = 150.0f; ////////////// TODO: measured X min-to-max travel
+constexpr float MACHINE_Y_TRAVEL_MM = 200.0f; ////////////// TODO: measured Y min-to-max travel
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
 // for switch overtravel, encoder error, and stopping distance.
-constexpr float LIMIT_BOUNDARY_TOLERANCE_MM = 1.0f;
+constexpr float LIMIT_BOUNDARY_TOLERANCE_MM = 10.0f;
 
 // Debounced limit states are checked against the current FSM state at this
 // interval outside HOMING. LimitSwitch::update() itself still runs every loop.
@@ -58,23 +58,23 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 
 // Initial origin-homing values. These PWM values and distances must be tuned
 // on the real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 125;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 200;
 constexpr uint8_t HOMING_BACKOFF_PWM = 100;
-constexpr uint8_t HOMING_FINE_APPROACH_PWM = 50;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 30;
+constexpr uint8_t HOMING_FINE_APPROACH_PWM = 75;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 75;
 
-constexpr float HOMING_BACKOFF_DISTANCE_MM = 10.0f;
+constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 
 constexpr unsigned long HOMING_CONTACT_PAUSE_MS = 250UL;
 constexpr unsigned long HOMING_FINE_CONTACT_PAUSE_MS = 250UL;
 constexpr unsigned long HOMING_SEARCH_TIMEOUT_MS = 30000UL;
-constexpr unsigned long HOMING_BACKOFF_TIMEOUT_MS = 5000UL;
+constexpr unsigned long HOMING_BACKOFF_TIMEOUT_MS = 30000UL;
 constexpr unsigned long HOMING_FINAL_RELEASE_TIMEOUT_MS = 5000UL;
 constexpr unsigned long HOMING_OVERALL_TIMEOUT_MS = 180000UL;
 
 // true: stop on the ISR edge, then wait for software debounce confirmation.
 // false: stop on the ISR edge and accept it immediately during homing.
-constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = true;
+constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = false;
 // Temporary values until hardware direction testing.
 constexpr bool MOTOR_1_DIRECTION_INVERTED = false;
 constexpr bool MOTOR_2_DIRECTION_INVERTED = false;

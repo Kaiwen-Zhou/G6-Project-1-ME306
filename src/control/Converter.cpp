@@ -16,13 +16,14 @@ Converter::MotorReference Converter::cartesianToMotorReference(float xDisplaceme
     // A =  X - Y
     // B = -X - Y
 
-    const float aDisplacementMm = -yDisplacementMm + xDisplacementMm;
+    const float aDisplacementMm = xDisplacementMm + yDisplacementMm;
+    const float bDisplacementMm = xDisplacementMm - yDisplacementMm;
 
-    const float bDisplacementMm = -yDisplacementMm - xDisplacementMm;
+    const float aVelocityMmPerSecond =
+    xVelocityMmPerSecond + yVelocityMmPerSecond;
 
-    const float aVelocityMmPerSecond = -yVelocityMmPerSecond + xVelocityMmPerSecond;
-
-    const float bVelocityMmPerSecond = -yVelocityMmPerSecond - xVelocityMmPerSecond;
+    const float bVelocityMmPerSecond =
+    xVelocityMmPerSecond - yVelocityMmPerSecond;
 
     const float signedAMmPerCount = motorAMmPerCount_ * motorACoordinateSign_;
 
@@ -38,17 +39,19 @@ Converter::CartesianDisplacement Converter::motorToCartesianDisplacement(float a
 
     const float bDisplacementMm = bDisplacementCounts * motorBMmPerCount_ * motorBCoordinateSign_;
 
-    // Inverse of A = X - Y and B = -X - Y:
+    // Inverse of A = X - Y and B = X - Y:
     //
     // X =  (A - B) / 2
-    // Y = -(A + B) / 2
+    // Y = (A + B) / 2
 
-    const float physicalXDisplacementMm = 0.5f * (aDisplacementMm + bDisplacementMm);
+    const float xDisplacementMm =
+        0.5f * (aDisplacementMm + bDisplacementMm);
 
-    const float physicalYDisplacementMm = 0.5f * (aDisplacementMm - bDisplacementMm);
+    const float yDisplacementMm =
+        0.5f * (aDisplacementMm - bDisplacementMm);
 
     return {
-        physicalYDisplacementMm, // software X
-        -physicalXDisplacementMm // software Y
+        xDisplacementMm,
+        yDisplacementMm
     };
 }

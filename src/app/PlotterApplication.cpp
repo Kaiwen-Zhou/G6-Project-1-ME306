@@ -8,13 +8,13 @@
 namespace plotter {
 
 namespace {
-constexpr float INITIAL_A_KP = 5.0f;
+constexpr float INITIAL_A_KP = 0.5f;
 constexpr float INITIAL_A_KI = 0.00f;
-constexpr float INITIAL_A_KV = 0.00f;
+constexpr float INITIAL_A_KV = 0.50f;
 
-constexpr float INITIAL_B_KP = 5.0f;
+constexpr float INITIAL_B_KP = 0.5f;
 constexpr float INITIAL_B_KI = 0.00f;
-constexpr float INITIAL_B_KV = 0.00f;
+constexpr float INITIAL_B_KV = 0.50f;
 
 constexpr float CONTROLLER_MINIMUM_OUTPUT = -255.0f;
 constexpr float CONTROLLER_MAXIMUM_OUTPUT = 255.0f;

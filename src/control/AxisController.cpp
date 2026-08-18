@@ -5,6 +5,18 @@
 namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 
+constexpr float REFERENCE_VELOCITY_EPSILON = 0.01f;
+
+// Static-friction compensation.
+constexpr float STATIC_FEEDFORWARD_PWM = 70.0f;
+
+// Static feedforward reaches its full value at this reference speed.
+// Below it, the added PWM ramps proportionally with trajectory speed.
+constexpr float STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND = 50.0f;
+
+// Maximum PWM allowed opposite to the current trajectory direction.
+constexpr float MAXIMUM_REVERSE_BRAKING_PWM = 40.0f;
+
 float makeNonNegative(float value) {
     return value < 0.0f ? -value : value;
 }
@@ -112,7 +124,38 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
         return;
     }
 
-    const float controllerOutput = pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
+    float controllerOutput =
+        pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
+
+    if (referenceVelocity_ > REFERENCE_VELOCITY_EPSILON) {
+        float staticFeedforwardScale =
+            referenceVelocity_ / STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND;
+
+        if (staticFeedforwardScale > 1.0f) {
+            staticFeedforwardScale = 1.0f;
+        }
+
+        controllerOutput += STATIC_FEEDFORWARD_PWM * staticFeedforwardScale;
+
+        // Allow limited reverse braking, but never more than the configured PWM.
+        if (controllerOutput < -MAXIMUM_REVERSE_BRAKING_PWM) {
+            controllerOutput = -MAXIMUM_REVERSE_BRAKING_PWM;
+        }
+    } else if (referenceVelocity_ < -REFERENCE_VELOCITY_EPSILON) {
+        float staticFeedforwardScale =
+            -referenceVelocity_ / STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND;
+
+        if (staticFeedforwardScale > 1.0f) {
+            staticFeedforwardScale = 1.0f;
+        }
+
+        controllerOutput -= STATIC_FEEDFORWARD_PWM * staticFeedforwardScale;
+
+        // Allow limited reverse braking, but never more than the configured PWM.
+        if (controllerOutput > MAXIMUM_REVERSE_BRAKING_PWM) {
+            controllerOutput = MAXIMUM_REVERSE_BRAKING_PWM;
+        }
+    }
 
     motor_.setOutput(convertToMotorCommand(controllerOutput));
 }
