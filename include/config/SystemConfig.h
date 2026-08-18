@@ -11,7 +11,7 @@ constexpr unsigned long SERIAL_BAUD_RATE = 115200UL;
 // to the relative displacement used by the trajectory and control layers.
 // ABSOLUTE: G01 X10 Y20 moves to machine coordinate (10, 20).
 // RELATIVE: G01 X10 Y20 moves +10 mm in X and +20 mm in Y.
-constexpr plotter::GCodePositioningMode GCODE_POSITIONING_MODE = plotter::GCodePositioningMode::ABSOLUTE;
+constexpr plotter::GCodePositioningMode GCODE_POSITIONING_MODE = plotter::GCodePositioningMode::RELATIVE;
 
 // The junction board supplies the external pull-down.
 // Active-high: HIGH = pressed, LOW = released.
@@ -34,7 +34,7 @@ constexpr float MOTOR_B_MM_PER_COUNT =
 
 // +1: positive raw count is positive A/B displacement.
 // -1: positive raw count is negative A/B displacement.
-constexpr int8_t MOTOR_A_COORDINATE_SIGN = 1;
+constexpr int8_t MOTOR_A_COORDINATE_SIGN = -1;
 constexpr int8_t MOTOR_B_COORDINATE_SIGN = -1;
 
 constexpr unsigned long MOTION_CONTROL_PERIOD_MICROS = 5000UL;
@@ -58,10 +58,10 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 
 // Initial origin-homing values. These PWM values and distances must be tuned
 // on the real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 200;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 175;
 constexpr uint8_t HOMING_BACKOFF_PWM = 100;
 constexpr uint8_t HOMING_FINE_APPROACH_PWM = 75;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 75;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 80;
 
 constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 
@@ -76,6 +76,6 @@ constexpr unsigned long HOMING_OVERALL_TIMEOUT_MS = 180000UL;
 // false: stop on the ISR edge and accept it immediately during homing.
 constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = false;
 // Temporary values until hardware direction testing.
-constexpr bool MOTOR_1_DIRECTION_INVERTED = true;
+constexpr bool MOTOR_1_DIRECTION_INVERTED = false;
 constexpr bool MOTOR_2_DIRECTION_INVERTED = true;
 } // namespace SystemConfig
