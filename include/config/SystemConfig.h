@@ -71,9 +71,9 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 175;
 constexpr uint8_t HOMING_BACKOFF_PWM = 100;
 constexpr uint8_t HOMING_FINE_APPROACH_PWM = 75;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 80;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 55;
 
-constexpr float HOMING_BACKOFF_DISTANCE_MM = 5.0f;
+constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 
 // Keep the axis perpendicular to the current homing direction at the position
 // recorded when the current X or Y homing target starts. The same reference is
@@ -82,6 +82,10 @@ constexpr bool HOMING_STRAIGHTNESS_CORRECTION_ENABLED = true;
 constexpr float HOMING_STRAIGHTNESS_KP_PWM_PER_MM = 10.0f;
 constexpr uint8_t HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM = 20;
 constexpr float HOMING_STRAIGHTNESS_DEADBAND_MM = 0.1f;
+
+// Ignore only the LEFT/X_MIN limit while Y is being homed. X homing and all
+// other limit switches retain their normal homing safety behaviour.
+constexpr bool HOMING_IGNORE_X_MIN_DURING_Y = true;
 
 constexpr unsigned long HOMING_CONTACT_PAUSE_MS = 500UL;
 constexpr unsigned long HOMING_FINE_CONTACT_PAUSE_MS = 500UL;

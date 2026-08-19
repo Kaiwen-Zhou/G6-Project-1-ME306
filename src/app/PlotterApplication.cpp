@@ -8,19 +8,19 @@
 namespace plotter {
 
 namespace {
-constexpr float INITIAL_A_KP = 0.5f;
-constexpr float INITIAL_A_KI = 0.00f;
-constexpr float INITIAL_A_KV = 0.00f;
+constexpr float INITIAL_A_KP = 0.8f;
+constexpr float INITIAL_A_KI = 0.6f;
+constexpr float INITIAL_A_KV = 0.01f;
 
-constexpr float INITIAL_B_KP = 0.5f;
-constexpr float INITIAL_B_KI = 0.00f;
-constexpr float INITIAL_B_KV = 0.00f;
+constexpr float INITIAL_B_KP = 0.8f;
+constexpr float INITIAL_B_KI = 0.6f;
+constexpr float INITIAL_B_KV = 0.01f;
 
 constexpr float CONTROLLER_MINIMUM_OUTPUT = -255.0f;
 constexpr float CONTROLLER_MAXIMUM_OUTPUT = 255.0f;
-constexpr float INTEGRAL_MINIMUM_OUTPUT = -255.0f;
-constexpr float INTEGRAL_MAXIMUM_OUTPUT = 255.0f;
-constexpr float POSITION_TOLERANCE_COUNTS = 100.0f;
+constexpr float INTEGRAL_MINIMUM_OUTPUT = -40.0f;
+constexpr float INTEGRAL_MAXIMUM_OUTPUT = 40.0f;
+constexpr float POSITION_TOLERANCE_COUNTS = 30.0f;
 
 constexpr uint8_t MOTOR_OUTPUT_LIMIT = SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT;
 
@@ -75,6 +75,7 @@ PlotterApplication::PlotterApplication()
                     SystemConfig::HOMING_STRAIGHTNESS_KP_PWM_PER_MM,
                     SystemConfig::HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM,
                     SystemConfig::HOMING_STRAIGHTNESS_DEADBAND_MM,
+                    SystemConfig::HOMING_IGNORE_X_MIN_DURING_Y,
                     SystemConfig::HOMING_CONTACT_PAUSE_MS,
                     SystemConfig::HOMING_FINE_CONTACT_PAUSE_MS, SystemConfig::HOMING_SEARCH_TIMEOUT_MS,
                     SystemConfig::HOMING_BACKOFF_TIMEOUT_MS,    SystemConfig::HOMING_FINAL_RELEASE_TIMEOUT_MS,
@@ -655,6 +656,9 @@ void PlotterApplication::reportHomingCompletion(bool limitsLoadedNow) {
 
     homingCompletionReported_ = true;
     const HomingResult result = homingController_.result();
+    const uint8_t originLimitMask =
+        static_cast<uint8_t>(LimitSafetyManager::LEFT_LIMIT_MASK | LimitSafetyManager::BOTTOM_LIMIT_MASK);
+    const uint8_t expectedLimitMask = limitSafety_.armPressedLimitsAfterHoming(originLimitMask);
 
     Serial.print(F("# HOMING COMPLETE xOriginCounts="));
     Serial.print(result.xOrigin.countA);
@@ -664,6 +668,8 @@ void PlotterApplication::reportHomingCompletion(bool limitsLoadedNow) {
     Serial.print(result.yOrigin.countA);
     Serial.print(',');
     Serial.print(result.yOrigin.countB);
+    Serial.print(F(" expected_mask=0x"));
+    Serial.print(expectedLimitMask, HEX);
 
     if (limitsLoadedNow || gCodeController_.safetyLimitsLoaded()) {
         Serial.print(F(" soft_limits_mm=0.."));

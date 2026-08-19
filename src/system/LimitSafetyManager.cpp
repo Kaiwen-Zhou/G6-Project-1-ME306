@@ -76,6 +76,8 @@ LimitSafetyUpdate LimitSafetyManager::update() {
         return result;
     }
 
+    result.releasedExpectedMask = clearReleasedExpectedLimits();
+
     const uint8_t confirmedInterruptMask = collectConfirmedInterrupts();
 
     if (confirmedInterruptMask != 0U) {
@@ -89,10 +91,6 @@ LimitSafetyUpdate LimitSafetyManager::update() {
     }
 
     lastSafetyCheckMs_ = currentTimeMs;
-
-    if (state == PlotterState::MOVING) {
-        result.releasedExpectedMask = clearReleasedExpectedLimitsDuringMove();
-    }
 
     const uint8_t unexpectedMask = unexpectedPressedMask();
 
@@ -159,6 +157,15 @@ void LimitSafetyManager::armRecoverableLimitsAfterReset() {
     recoverableLimitMask_ = 0U;
     lastResetBlockingLimitMask_ = 0U;
     gCodeController_.setExpectedLimitMask(expectedLimitMask_);
+}
+
+uint8_t LimitSafetyManager::armPressedLimitsAfterHoming(uint8_t eligibleMask) {
+    expectedLimitMask_ = static_cast<uint8_t>(pressedMask() & eligibleMask);
+    recoverableLimitMask_ = 0U;
+    pendingInterruptMask_ = 0U;
+    lastResetBlockingLimitMask_ = 0U;
+    gCodeController_.setExpectedLimitMask(expectedLimitMask_);
+    return expectedLimitMask_;
 }
 
 void LimitSafetyManager::clearForHoming() {
@@ -241,7 +248,7 @@ uint8_t LimitSafetyManager::classifyRecoverableBoundaryLimits(uint8_t candidateM
     return recoverableMask;
 }
 
-uint8_t LimitSafetyManager::clearReleasedExpectedLimitsDuringMove() {
+uint8_t LimitSafetyManager::clearReleasedExpectedLimits() {
     const uint8_t releasedMask = static_cast<uint8_t>(expectedLimitMask_ & static_cast<uint8_t>(~pressedMask()));
 
     if (releasedMask != 0U) {

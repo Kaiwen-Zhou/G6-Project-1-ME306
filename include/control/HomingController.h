@@ -38,6 +38,7 @@ struct HomingConfig {
         float straightnessKpPwmPerMm;
         uint8_t straightnessMaximumCorrectionPwm;
         float straightnessDeadbandMm;
+        bool ignoreXMinDuringYHoming;
 
         unsigned long contactPauseMs;
         unsigned long fineContactPauseMs;
@@ -107,6 +108,7 @@ class HomingController {
         bool switchTriggered(ExpectedSwitch expected, uint8_t interruptMask) const;
         bool hasContradictoryLimits(uint8_t interruptMask = 0U) const;
         bool hasUnexpectedLimit(uint8_t interruptMask = 0U);
+        uint8_t ignoredLimitMask() const;
 
         LimitSwitch& switchFor(ExpectedSwitch expected);
 

@@ -52,6 +52,10 @@ class LimitSafetyManager {
         bool faultResetAllowed();
         void armRecoverableLimitsAfterReset();
 
+        // After a successful G28, currently pressed eligible origin switches
+        // use the same expected-until-release policy as M999 recovery.
+        uint8_t armPressedLimitsAfterHoming(uint8_t eligibleMask);
+
         // A new G28 starts a separate homing policy and clears recovery state.
         void clearForHoming();
 
@@ -68,7 +72,7 @@ class LimitSafetyManager {
         uint8_t collectConfirmedInterrupts();
         uint8_t unexpectedPressedMask() const;
         uint8_t classifyRecoverableBoundaryLimits(uint8_t candidateMask) const;
-        uint8_t clearReleasedExpectedLimitsDuringMove();
+        uint8_t clearReleasedExpectedLimits();
 
         LimitSwitch& leftLimit_;
         LimitSwitch& rightLimit_;

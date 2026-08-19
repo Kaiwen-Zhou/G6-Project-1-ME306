@@ -225,7 +225,13 @@ void HomingController::update() {
 }
 
 void HomingController::notifyLimitInterrupt(uint8_t interruptMask) {
-    if (!active_ || interruptMask == 0U) {
+    if (!active_) {
+        return;
+    }
+
+    interruptMask &= static_cast<uint8_t>(~ignoredLimitMask());
+
+    if (interruptMask == 0U) {
         return;
     }
 
@@ -302,9 +308,11 @@ void HomingController::beginTarget(HomingStage nextStage) {
 
     for (uint8_t index = 0; index < LIMIT_SWITCH_COUNT; ++index) {
         const ExpectedSwitch current = static_cast<ExpectedSwitch>(index);
+        const uint8_t bit = static_cast<uint8_t>(1U << index);
 
-        if (current != expectedSwitch_ && limitSwitches_[index]->isPressed()) {
-            allowedPressedMask_ |= static_cast<uint8_t>(1U << index);
+        if (current != expectedSwitch_ && (ignoredLimitMask() & bit) == 0U &&
+            limitSwitches_[index]->isPressed()) {
+            allowedPressedMask_ |= bit;
         }
     }
 
@@ -379,6 +387,11 @@ bool HomingController::switchTriggered(ExpectedSwitch expected, uint8_t interrup
 
     const uint8_t index = static_cast<uint8_t>(expected);
     const uint8_t bit = static_cast<uint8_t>(1U << index);
+
+    if ((ignoredLimitMask() & bit) != 0U) {
+        return false;
+    }
+
     return limitSwitches_[index]->isPressed() || (interruptMask & bit) != 0U;
 }
 
@@ -402,6 +415,10 @@ bool HomingController::hasUnexpectedLimit(uint8_t interruptMask) {
 
         const uint8_t bit = static_cast<uint8_t>(1U << index);
 
+        if ((ignoredLimitMask() & bit) != 0U) {
+            continue;
+        }
+
         if ((allowedPressedMask_ & bit) != 0U) {
             if (limitSwitches_[index]->isReleased()) {
                 allowedPressedMask_ &= static_cast<uint8_t>(~bit);
@@ -416,6 +433,14 @@ bool HomingController::hasUnexpectedLimit(uint8_t interruptMask) {
     }
 
     return false;
+}
+
+uint8_t HomingController::ignoredLimitMask() const {
+    if (config_.ignoreXMinDuringYHoming && stage_ == HomingStage::Y_ORIGIN) {
+        return static_cast<uint8_t>(1U << static_cast<uint8_t>(ExpectedSwitch::X_MIN));
+    }
+
+    return 0U;
 }
 
 LimitSwitch& HomingController::switchFor(ExpectedSwitch expected) {
