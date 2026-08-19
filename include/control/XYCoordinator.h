@@ -63,6 +63,9 @@ class XYCoordinator {
         void setCartesianReference(float xDisplacementMm, float yDisplacementMm, float xVelocityMmPerSecond,
                                    float yVelocityMmPerSecond);
 
+        void setCartesianReference(float xDisplacementMm, float yDisplacementMm, float xVelocityMmPerSecond,
+                                   float yVelocityMmPerSecond, float remainingDistanceFraction);
+
         // Run at most one coordinated A/B control update when the
         // configured control interval has elapsed.
         void update();

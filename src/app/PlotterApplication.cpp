@@ -10,22 +10,22 @@ namespace plotter {
 namespace {
 constexpr float INITIAL_A_KP = 0.5f;
 constexpr float INITIAL_A_KI = 0.00f;
-constexpr float INITIAL_A_KV = 0.50f;
+constexpr float INITIAL_A_KV = 0.00f;
 
 constexpr float INITIAL_B_KP = 0.5f;
 constexpr float INITIAL_B_KI = 0.00f;
-constexpr float INITIAL_B_KV = 0.50f;
+constexpr float INITIAL_B_KV = 0.00f;
 
 constexpr float CONTROLLER_MINIMUM_OUTPUT = -255.0f;
 constexpr float CONTROLLER_MAXIMUM_OUTPUT = 255.0f;
 constexpr float INTEGRAL_MINIMUM_OUTPUT = -255.0f;
 constexpr float INTEGRAL_MAXIMUM_OUTPUT = 255.0f;
-constexpr float POSITION_TOLERANCE_COUNTS = 20.0f;
+constexpr float POSITION_TOLERANCE_COUNTS = 100.0f;
 
 constexpr uint8_t MOTOR_OUTPUT_LIMIT = SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT;
 
-constexpr float MAXIMUM_FEEDRATE_MM_PER_MINUTE = 60.0f * 10.0f; // 10 mm/s
-constexpr float MAXIMUM_ACCELERATION_MM_PER_SECOND_SQUARED = 10.0f;
+constexpr float MAXIMUM_FEEDRATE_MM_PER_MINUTE = 60.0f * 500.0f; // 500 mm/s
+constexpr float MAXIMUM_ACCELERATION_MM_PER_SECOND_SQUARED = 50.0f;
 constexpr unsigned long TELEMETRY_INTERVAL_MS = 20UL;
 } // namespace
 
@@ -70,7 +70,12 @@ PlotterApplication::PlotterApplication()
       xyCoordinator_(encoderA_, encoderB_, axisA_, axisB_, converter_, SystemConfig::MOTION_CONTROL_PERIOD_MICROS),
       homingConfig_{SystemConfig::HOMING_COARSE_APPROACH_PWM,   SystemConfig::HOMING_BACKOFF_PWM,
                     SystemConfig::HOMING_FINE_APPROACH_PWM,     SystemConfig::HOMING_FINAL_RELEASE_PWM,
-                    SystemConfig::HOMING_BACKOFF_DISTANCE_MM,   SystemConfig::HOMING_CONTACT_PAUSE_MS,
+                    SystemConfig::HOMING_BACKOFF_DISTANCE_MM,
+                    SystemConfig::HOMING_STRAIGHTNESS_CORRECTION_ENABLED,
+                    SystemConfig::HOMING_STRAIGHTNESS_KP_PWM_PER_MM,
+                    SystemConfig::HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM,
+                    SystemConfig::HOMING_STRAIGHTNESS_DEADBAND_MM,
+                    SystemConfig::HOMING_CONTACT_PAUSE_MS,
                     SystemConfig::HOMING_FINE_CONTACT_PAUSE_MS, SystemConfig::HOMING_SEARCH_TIMEOUT_MS,
                     SystemConfig::HOMING_BACKOFF_TIMEOUT_MS,    SystemConfig::HOMING_FINAL_RELEASE_TIMEOUT_MS,
                     SystemConfig::HOMING_OVERALL_TIMEOUT_MS},

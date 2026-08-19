@@ -19,7 +19,7 @@ TrajectoryPlanner::TrajectoryPlanner()
       accelerationDistanceMm_(0.0f),
       cruiseDistanceMm_(0.0f), 
       elapsedTimeSeconds_(0.0f), 
-      reference_{0.0f, 0.0f, 0.0f, 0.0f, false}, 
+      reference_{0.0f, 0.0f, 0.0f, 0.0f, false, 0.0f}, 
       active_(false),
       complete_(false) {
 }
@@ -47,13 +47,13 @@ bool TrajectoryPlanner::startMove(float startXMm, float startYMm, float targetXM
     elapsedTimeSeconds_ = 0.0f;
 
     // Every new move begins at zero relative displacement.
-    reference_ = {0.0f, 0.0f, 0.0f, 0.0f, false};
+    reference_ = {0.0f, 0.0f, 0.0f, 0.0f, false, 1.0f};
 
     complete_ = false;
 
     // A zero-distance command is already complete.
     if (pathLengthMm_ == 0.0f) {
-        reference_ = {0.0f, 0.0f, 0.0f, 0.0f, true};
+        reference_ = {0.0f, 0.0f, 0.0f, 0.0f, true, 0.0f};
 
         active_ = false;
         complete_ = true;
@@ -139,7 +139,7 @@ TrajectoryReference TrajectoryPlanner::update(float timeStepSeconds) {
         pathVelocityMmPerSecond = peakVelocityMmPerSecond_ - accelerationMmPerSecondSquared_ * decelerationTimeSeconds;
     } else {
         // Use exact final displacement to avoid rounding drift.
-        reference_ = {targetXDisplacementMm_, targetYDisplacementMm_, 0.0f, 0.0f, true};
+        reference_ = {targetXDisplacementMm_, targetYDisplacementMm_, 0.0f, 0.0f, true, 0.0f};
 
         active_ = false;
         complete_ = true;
@@ -163,6 +163,9 @@ TrajectoryReference TrajectoryPlanner::update(float timeStepSeconds) {
     reference_.xVelocityMmPerSecond = directionX_ * pathVelocityMmPerSecond;
 
     reference_.yVelocityMmPerSecond = directionY_ * pathVelocityMmPerSecond;
+
+    reference_.remainingDistanceFraction =
+        (pathLengthMm_ - distanceAlongPathMm) / pathLengthMm_;
 
     reference_.complete = false;
 

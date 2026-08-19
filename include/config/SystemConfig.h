@@ -40,12 +40,22 @@ constexpr int8_t MOTOR_B_COORDINATE_SIGN = -1;
 constexpr unsigned long MOTION_CONTROL_PERIOD_MICROS = 5000UL;
 constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 
+// Static-friction compensation added in the commanded movement direction.
+constexpr float MOTION_BASE_PWM = 70.0f;
+
+// Begin reducing MOTION_BASE_PWM when this percentage of the planned path
+// remains. The base PWM then decreases linearly to zero at the destination.
+constexpr float MOTION_BASE_PWM_TAPER_START_REMAINING_PERCENT = 20.0f;
+
+// Maximum PWM permitted opposite to the commanded movement direction.
+constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 80.0f;
+
 // Fixed Cartesian soft limits measured from the released origin positions.
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 210.0f; ////////////// TODO: measured X min-to-max travel
-constexpr float MACHINE_Y_TRAVEL_MM = 150.0f; ////////////// TODO: measured Y min-to-max travel
+constexpr float MACHINE_X_TRAVEL_MM = 211.0f; ////////////// TODO: measured X min-to-max travel
+constexpr float MACHINE_Y_TRAVEL_MM = 135.0f; ////////////// TODO: measured Y min-to-max travel
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
@@ -63,10 +73,18 @@ constexpr uint8_t HOMING_BACKOFF_PWM = 100;
 constexpr uint8_t HOMING_FINE_APPROACH_PWM = 75;
 constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 80;
 
-constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
+constexpr float HOMING_BACKOFF_DISTANCE_MM = 5.0f;
 
-constexpr unsigned long HOMING_CONTACT_PAUSE_MS = 250UL;
-constexpr unsigned long HOMING_FINE_CONTACT_PAUSE_MS = 250UL;
+// Keep the axis perpendicular to the current homing direction at the position
+// recorded when the current X or Y homing target starts. The same reference is
+// retained through coarse approach, backoff, fine approach, and final release.
+constexpr bool HOMING_STRAIGHTNESS_CORRECTION_ENABLED = true;
+constexpr float HOMING_STRAIGHTNESS_KP_PWM_PER_MM = 10.0f;
+constexpr uint8_t HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM = 20;
+constexpr float HOMING_STRAIGHTNESS_DEADBAND_MM = 0.1f;
+
+constexpr unsigned long HOMING_CONTACT_PAUSE_MS = 500UL;
+constexpr unsigned long HOMING_FINE_CONTACT_PAUSE_MS = 500UL;
 constexpr unsigned long HOMING_SEARCH_TIMEOUT_MS = 30000UL;
 constexpr unsigned long HOMING_BACKOFF_TIMEOUT_MS = 30000UL;
 constexpr unsigned long HOMING_FINAL_RELEASE_TIMEOUT_MS = 5000UL;

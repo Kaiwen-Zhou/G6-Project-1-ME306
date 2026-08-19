@@ -2,23 +2,39 @@
 
 #include <Arduino.h>
 
+#include "config/SystemConfig.h"
+
 namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 
 constexpr float REFERENCE_VELOCITY_EPSILON = 0.01f;
-
-// Static-friction compensation.
-constexpr float STATIC_FEEDFORWARD_PWM = 70.0f;
-
-// Static feedforward reaches its full value at this reference speed.
-// Below it, the added PWM ramps proportionally with trajectory speed.
-constexpr float STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND = 50.0f;
-
-// Maximum PWM allowed opposite to the current trajectory direction.
-constexpr float MAXIMUM_REVERSE_BRAKING_PWM = 40.0f;
+constexpr float PERCENT_TO_FRACTION = 0.01f;
 
 float makeNonNegative(float value) {
     return value < 0.0f ? -value : value;
+}
+
+float calculateBasePwmScale(float remainingDistanceFraction) {
+    if (remainingDistanceFraction <= 0.0f) {
+        return 0.0f;
+    }
+
+    if (remainingDistanceFraction > 1.0f) {
+        remainingDistanceFraction = 1.0f;
+    }
+
+    float taperStartFraction =
+        SystemConfig::MOTION_BASE_PWM_TAPER_START_REMAINING_PERCENT * PERCENT_TO_FRACTION;
+
+    if (taperStartFraction > 1.0f) {
+        taperStartFraction = 1.0f;
+    }
+
+    if (taperStartFraction <= 0.0f || remainingDistanceFraction >= taperStartFraction) {
+        return 1.0f;
+    }
+
+    return remainingDistanceFraction / taperStartFraction;
 }
 } // namespace
 
@@ -30,7 +46,9 @@ AxisController::AxisController(PIDController& pidController, MotorDriver& motor,
       legacyUpdateIntervalMicros_(0),
       legacyLastUpdateMicros_(0), 
       referencePosition_(0.0f), 
-      referenceVelocity_(0.0f), 
+      referenceVelocity_(0.0f),
+      remainingDistanceFraction_(0.0f),
+      movementDirection_(0),
       currentPosition_(0),
       trackingError_(0.0f), 
       active_(false) {
@@ -45,7 +63,9 @@ AxisController::AxisController(Encoder& encoder, PIDController& pidController, M
       legacyUpdateIntervalMicros_(updateIntervalMicros), 
       legacyLastUpdateMicros_(0), 
       referencePosition_(0.0f),
-      referenceVelocity_(0.0f), 
+      referenceVelocity_(0.0f),
+      remainingDistanceFraction_(0.0f),
+      movementDirection_(0),
       currentPosition_(0), 
       trackingError_(0.0f), 
       active_(false) {
@@ -58,6 +78,8 @@ void AxisController::begin() {
 
     active_ = false;
     referenceVelocity_ = 0.0f;
+    remainingDistanceFraction_ = 0.0f;
+    movementDirection_ = 0;
     legacyLastUpdateMicros_ = 0;
 
     if (legacyEncoder_ != nullptr) {
@@ -80,6 +102,8 @@ void AxisController::startTracking(int32_t currentPosition) {
     referencePosition_ = static_cast<float>(currentPosition);
 
     referenceVelocity_ = 0.0f;
+    remainingDistanceFraction_ = 0.0f;
+    movementDirection_ = 0;
     trackingError_ = 0.0f;
 
     active_ = true;
@@ -99,14 +123,26 @@ void AxisController::startTracking() {
 }
 
 void AxisController::setReference(float referencePosition, float referenceVelocityCountsPerSecond) {
+    setReference(referencePosition, referenceVelocityCountsPerSecond, 0.0f);
+}
+
+void AxisController::setReference(float referencePosition, float referenceVelocityCountsPerSecond,
+                                  float remainingDistanceFraction) {
     referencePosition_ = referencePosition;
     referenceVelocity_ = referenceVelocityCountsPerSecond;
+    remainingDistanceFraction_ = remainingDistanceFraction;
+
+    if (referenceVelocity_ > REFERENCE_VELOCITY_EPSILON) {
+        movementDirection_ = 1;
+    } else if (referenceVelocity_ < -REFERENCE_VELOCITY_EPSILON) {
+        movementDirection_ = -1;
+    }
 
     trackingError_ = referencePosition_ - static_cast<float>(currentPosition_);
 }
 
 void AxisController::setReferencePosition(int32_t referencePosition) {
-    setReference(static_cast<float>(referencePosition), 0.0f);
+    setReference(static_cast<float>(referencePosition), 0.0f, 0.0f);
 }
 
 void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
@@ -127,33 +163,23 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
     float controllerOutput =
         pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
 
-    if (referenceVelocity_ > REFERENCE_VELOCITY_EPSILON) {
-        float staticFeedforwardScale =
-            referenceVelocity_ / STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND;
+    const float basePwm =
+        SystemConfig::MOTION_BASE_PWM * calculateBasePwmScale(remainingDistanceFraction_);
 
-        if (staticFeedforwardScale > 1.0f) {
-            staticFeedforwardScale = 1.0f;
+    if (movementDirection_ > 0) {
+        // Static-friction compensation is added only while the controller is
+        // still requesting motion in the planned direction. It must not weaken
+        // a requested reverse braking correction.
+        if (controllerOutput >= 0.0f) {
+            controllerOutput += basePwm;
+        } else if (controllerOutput < -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+            controllerOutput = -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
         }
-
-        controllerOutput += STATIC_FEEDFORWARD_PWM * staticFeedforwardScale;
-
-        // Allow limited reverse braking, but never more than the configured PWM.
-        if (controllerOutput < -MAXIMUM_REVERSE_BRAKING_PWM) {
-            controllerOutput = -MAXIMUM_REVERSE_BRAKING_PWM;
-        }
-    } else if (referenceVelocity_ < -REFERENCE_VELOCITY_EPSILON) {
-        float staticFeedforwardScale =
-            -referenceVelocity_ / STATIC_FEEDFORWARD_RAMP_COUNTS_PER_SECOND;
-
-        if (staticFeedforwardScale > 1.0f) {
-            staticFeedforwardScale = 1.0f;
-        }
-
-        controllerOutput -= STATIC_FEEDFORWARD_PWM * staticFeedforwardScale;
-
-        // Allow limited reverse braking, but never more than the configured PWM.
-        if (controllerOutput > MAXIMUM_REVERSE_BRAKING_PWM) {
-            controllerOutput = MAXIMUM_REVERSE_BRAKING_PWM;
+    } else if (movementDirection_ < 0) {
+        if (controllerOutput <= 0.0f) {
+            controllerOutput -= basePwm;
+        } else if (controllerOutput > SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+            controllerOutput = SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
         }
     }
 
@@ -189,6 +215,8 @@ void AxisController::stop() {
     pidController_.reset();
 
     referenceVelocity_ = 0.0f;
+    remainingDistanceFraction_ = 0.0f;
+    movementDirection_ = 0;
     active_ = false;
 }
 
@@ -200,6 +228,8 @@ void AxisController::reset(int32_t currentPosition) {
     referencePosition_ = static_cast<float>(currentPosition);
 
     referenceVelocity_ = 0.0f;
+    remainingDistanceFraction_ = 0.0f;
+    movementDirection_ = 0;
     trackingError_ = 0.0f;
 
     legacyLastUpdateMicros_ = 0;

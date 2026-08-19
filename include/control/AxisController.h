@@ -39,7 +39,12 @@ class AxisController {
         void startTracking();
 
         // Set the continuously changing motor-space trajectory reference.
+        // remainingDistanceFraction is shared by both axes and refers to the
+        // remaining Cartesian path length: 1.0 at the start and 0.0 at the target.
         void setReference(float referencePosition, float referenceVelocityCountsPerSecond);
+
+        void setReference(float referencePosition, float referenceVelocityCountsPerSecond,
+                          float remainingDistanceFraction);
 
         // Temporary fixed-position compatibility interface.
         void setReferencePosition(int32_t referencePosition);
@@ -83,6 +88,8 @@ class AxisController {
 
         float referencePosition_;
         float referenceVelocity_;
+        float remainingDistanceFraction_;
+        int8_t movementDirection_;
         int32_t currentPosition_;
         float trackingError_;
 

@@ -160,7 +160,8 @@ void PlotterSystem::executeAction(PlotterAction action) {
 
         xyCoordinator_.setCartesianReference(initialReference.xDisplacementMm, initialReference.yDisplacementMm,
                                              initialReference.xVelocityMmPerSecond,
-                                             initialReference.yVelocityMmPerSecond);
+                                             initialReference.yVelocityMmPerSecond,
+                                             initialReference.remainingDistanceFraction);
 
         break;
     }
@@ -210,7 +211,8 @@ void PlotterSystem::updateMoving() {
         const TrajectoryReference reference = trajectoryPlanner_.update(timeStepSeconds);
 
         xyCoordinator_.setCartesianReference(reference.xDisplacementMm, reference.yDisplacementMm,
-                                             reference.xVelocityMmPerSecond, reference.yVelocityMmPerSecond);
+                                             reference.xVelocityMmPerSecond, reference.yVelocityMmPerSecond,
+                                             reference.remainingDistanceFraction);
     }
 
     // XYCoordinator performs one synchronized encoder snapshot and

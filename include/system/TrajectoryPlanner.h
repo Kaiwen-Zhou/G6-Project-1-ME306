@@ -28,6 +28,10 @@ struct TrajectoryReference {
         // This becomes true when reference generation reaches the target.
         // The system must still wait for both motor controllers to settle.
         bool complete;
+
+        // Fraction of the total Cartesian path still remaining.
+        // 1.0 at the start of a non-zero move and 0.0 at the target.
+        float remainingDistanceFraction;
 };
 
 class TrajectoryPlanner {

@@ -33,7 +33,7 @@ HomingController::HomingController(Encoder& encoderA, Encoder& encoderB,
       limitSwitches_{&xMinSwitch, &xMaxSwitch, &yMinSwitch, &yMaxSwitch}, 
       config_(config),
       result_{{0, 0}, {0, 0}, false, false}, 
-      firstContactCounts_{0, 0}, releaseCounts_{0, 0}, 
+      firstContactCounts_{0, 0}, releaseCounts_{0, 0}, targetStartCounts_{0, 0},
       stage_(HomingStage::IDLE),
       phase_(HomingPhase::IDLE), 
       expectedSwitch_(ExpectedSwitch::NONE), 
@@ -52,6 +52,7 @@ void HomingController::begin() {
     result_ = {{0, 0}, {0, 0}, false, false};
     firstContactCounts_ = {0, 0};
     releaseCounts_ = {0, 0};
+    targetStartCounts_ = {0, 0};
 
     stage_ = HomingStage::IDLE;
     phase_ = HomingPhase::IDLE;
@@ -279,6 +280,7 @@ HomingResult HomingController::result() const {
 void HomingController::beginTarget(HomingStage nextStage) {
     stage_ = nextStage;
     interruptVerificationMask_ = 0;
+    targetStartCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
 
     switch (stage_) {
     case HomingStage::X_ORIGIN:
@@ -445,12 +447,82 @@ void HomingController::driveAwayFromTarget(uint8_t pwm) {
 }
 
 void HomingController::driveCartesian(int8_t xDirection, int8_t yDirection, uint8_t pwm) {
-    const Converter::MotorReference reference = converter_.cartesianToMotorReference(
+    const Converter::MotorReference baseReference = converter_.cartesianToMotorReference(
         0.0f, 0.0f, static_cast<float>(xDirection), static_cast<float>(yDirection));
 
-    motorA_.setOutput(commandForVelocitySign(reference.aVelocityCountsPerSecond, pwm));
+    int16_t motorACommand = commandForVelocitySign(baseReference.aVelocityCountsPerSecond, pwm);
+    int16_t motorBCommand = commandForVelocitySign(baseReference.bVelocityCountsPerSecond, pwm);
 
-    motorB_.setOutput(commandForVelocitySign(reference.bVelocityCountsPerSecond, pwm));
+    if (config_.straightnessCorrectionEnabled && ((xDirection == 0) != (yDirection == 0))) {
+        const float crossErrorMm = crossAxisErrorMm(xDirection, yDirection);
+        const uint8_t correctionPwm = straightnessCorrectionPwm(crossErrorMm, pwm);
+
+        if (correctionPwm > 0U) {
+            float correctionXDirection = 0.0f;
+            float correctionYDirection = 0.0f;
+
+            // Correct only the axis perpendicular to the commanded homing
+            // direction. The Converter supplies the corresponding A/B signs,
+            // including the configured coordinate-sign mapping.
+            if (xDirection != 0) {
+                correctionYDirection = crossErrorMm > 0.0f ? -1.0f : 1.0f;
+            } else {
+                correctionXDirection = crossErrorMm > 0.0f ? -1.0f : 1.0f;
+            }
+
+            const Converter::MotorReference correctionReference = converter_.cartesianToMotorReference(
+                0.0f, 0.0f, correctionXDirection, correctionYDirection);
+
+            motorACommand += commandForVelocitySign(correctionReference.aVelocityCountsPerSecond, correctionPwm);
+            motorBCommand += commandForVelocitySign(correctionReference.bVelocityCountsPerSecond, correctionPwm);
+        }
+    }
+
+    motorA_.setOutput(motorACommand);
+
+    motorB_.setOutput(motorBCommand);
+}
+
+float HomingController::crossAxisErrorMm(int8_t xDirection, int8_t yDirection) const {
+    const Encoder::CountPair current = Encoder::getCountPair(encoderA_, encoderB_);
+
+    const Converter::CartesianDisplacement displacement =
+        converter_.motorToCartesianDisplacement(static_cast<float>(current.countA - targetStartCounts_.countA),
+                                                static_cast<float>(current.countB - targetStartCounts_.countB));
+
+    if (xDirection != 0 && yDirection == 0) {
+        return displacement.yMm;
+    }
+
+    if (yDirection != 0 && xDirection == 0) {
+        return displacement.xMm;
+    }
+
+    return 0.0f;
+}
+
+uint8_t HomingController::straightnessCorrectionPwm(float crossAxisErrorMm, uint8_t basePwm) const {
+    float errorMagnitudeMm = absoluteValue(crossAxisErrorMm);
+
+    if (errorMagnitudeMm <= config_.straightnessDeadbandMm) {
+        return 0U;
+    }
+
+    errorMagnitudeMm -= config_.straightnessDeadbandMm;
+
+    float correctionPwm = config_.straightnessKpPwmPerMm * errorMagnitudeMm;
+
+    if (correctionPwm > static_cast<float>(config_.straightnessMaximumCorrectionPwm)) {
+        correctionPwm = static_cast<float>(config_.straightnessMaximumCorrectionPwm);
+    }
+
+    // The correction may slow one motor to zero, but it must not reverse a
+    // motor against the current homing direction.
+    if (correctionPwm > static_cast<float>(basePwm)) {
+        correctionPwm = static_cast<float>(basePwm);
+    }
+
+    return static_cast<uint8_t>(correctionPwm + 0.5f);
 }
 
 void HomingController::stopMotors() {
@@ -495,9 +567,17 @@ bool HomingController::phaseTimedOut(unsigned long timeoutMs) const {
 }
 
 bool HomingController::configurationIsValid() const {
-    return config_.coarseApproachPwm > 0 && config_.backoffPwm > 0 && config_.fineApproachPwm > 0 &&
-           config_.finalReleasePwm > 0 && config_.backoffDistanceMm > 0.0f && config_.searchTimeoutMs > 0 &&
-           config_.backoffTimeoutMs > 0 && config_.finalReleaseTimeoutMs > 0 && config_.overallTimeoutMs > 0;
+    const bool motionConfigurationValid =
+        config_.coarseApproachPwm > 0 && config_.backoffPwm > 0 && config_.fineApproachPwm > 0 &&
+        config_.finalReleasePwm > 0 && config_.backoffDistanceMm > 0.0f && config_.searchTimeoutMs > 0 &&
+        config_.backoffTimeoutMs > 0 && config_.finalReleaseTimeoutMs > 0 && config_.overallTimeoutMs > 0;
+
+    const bool straightnessConfigurationValid =
+        !config_.straightnessCorrectionEnabled ||
+        (config_.straightnessKpPwmPerMm > 0.0f && config_.straightnessMaximumCorrectionPwm > 0U &&
+         config_.straightnessDeadbandMm >= 0.0f);
+
+    return motionConfigurationValid && straightnessConfigurationValid;
 }
 
 void HomingController::fail(HomingFault fault) {

@@ -61,8 +61,14 @@ void XYCoordinator::startMove() {
     active_ = true;
 }
 
+void XYCoordinator::setCartesianReference(float xDisplacementMm, float yDisplacementMm,
+                                          float xVelocityMmPerSecond, float yVelocityMmPerSecond) {
+    setCartesianReference(xDisplacementMm, yDisplacementMm, xVelocityMmPerSecond,
+                          yVelocityMmPerSecond, 0.0f);
+}
+
 void XYCoordinator::setCartesianReference(float xDisplacementMm, float yDisplacementMm, float xVelocityMmPerSecond,
-                                          float yVelocityMmPerSecond) {
+                                          float yVelocityMmPerSecond, float remainingDistanceFraction) {
     if (!active_) {
         return;
     }
@@ -76,9 +82,11 @@ void XYCoordinator::setCartesianReference(float xDisplacementMm, float yDisplace
 
     const float absoluteBReference = static_cast<float>(moveStartCountB_) + motorReference.bDisplacementCounts;
 
-    axisA_.setReference(absoluteAReference, motorReference.aVelocityCountsPerSecond);
+    axisA_.setReference(absoluteAReference, motorReference.aVelocityCountsPerSecond,
+                        remainingDistanceFraction);
 
-    axisB_.setReference(absoluteBReference, motorReference.bVelocityCountsPerSecond);
+    axisB_.setReference(absoluteBReference, motorReference.bVelocityCountsPerSecond,
+                        remainingDistanceFraction);
 
     referenceXDisplacementMm_ = xDisplacementMm;
     referenceYDisplacementMm_ = yDisplacementMm;

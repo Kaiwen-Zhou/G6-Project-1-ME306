@@ -34,6 +34,11 @@ struct HomingConfig {
 
         float backoffDistanceMm;
 
+        bool straightnessCorrectionEnabled;
+        float straightnessKpPwmPerMm;
+        uint8_t straightnessMaximumCorrectionPwm;
+        float straightnessDeadbandMm;
+
         unsigned long contactPauseMs;
         unsigned long fineContactPauseMs;
         unsigned long searchTimeoutMs;
@@ -71,11 +76,12 @@ class HomingController {
         void update();
 
         // Called from the main loop after a limit ISR is latched. Immediately
-        // stops open-loop homing motion. Configuration selects whether the
+        // stops the open-loop primary homing motion and encoder straightness
+        // trim. Configuration selects whether the
         // edge must then pass debounce verification before it is accepted.
         void notifyLimitInterrupt(uint8_t interruptMask);
 
-        // Immediately stop open-loop homing motion.
+        // Immediately stop all homing motor output.
         void stop();
 
         bool isActive() const;
@@ -110,6 +116,8 @@ class HomingController {
         void driveTowardTarget(uint8_t pwm);
         void driveAwayFromTarget(uint8_t pwm);
         void driveCartesian(int8_t xDirection, int8_t yDirection, uint8_t pwm);
+        float crossAxisErrorMm(int8_t xDirection, int8_t yDirection) const;
+        uint8_t straightnessCorrectionPwm(float crossAxisErrorMm, uint8_t basePwm) const;
         void stopMotors();
 
         float distanceFromFirstContactMm() const;
@@ -134,6 +142,7 @@ class HomingController {
 
         Encoder::CountPair firstContactCounts_;
         Encoder::CountPair releaseCounts_;
+        Encoder::CountPair targetStartCounts_;
 
         HomingStage stage_;
         HomingPhase phase_;
