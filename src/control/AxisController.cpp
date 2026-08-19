@@ -163,8 +163,24 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
     float controllerOutput =
         pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
 
-    const float basePwm =
+    float basePwm =
         SystemConfig::MOTION_BASE_PWM * calculateBasePwmScale(remainingDistanceFraction_);
+
+    // The normal path-based taper can reduce the base PWM below the motor's
+    // static-friction threshold near the destination. While the motor is still
+    // outside tolerance and still behind the target in the planned movement
+    // direction, keep a small configurable amount of base PWM available.
+    //
+    // If the motor overshoots, stillBehindTarget becomes false immediately, so
+    // this endpoint minimum does not oppose reverse braking correction.
+    const bool stillBehindTarget =
+        (movementDirection_ > 0 && trackingError_ > positionTolerance_) ||
+        (movementDirection_ < 0 && trackingError_ < -positionTolerance_);
+
+    if (stillBehindTarget &&
+        basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
+        basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+    }
 
     if (movementDirection_ > 0) {
         // Static-friction compensation is added only while the controller is

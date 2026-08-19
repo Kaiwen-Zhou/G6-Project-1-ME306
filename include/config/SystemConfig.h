@@ -44,8 +44,14 @@ constexpr unsigned long MOVE_SETTLE_TIME_MICROS = 50000UL;
 constexpr float MOTION_BASE_PWM = 70.0f;
 
 // Begin reducing MOTION_BASE_PWM when this percentage of the planned path
-// remains. The base PWM then decreases linearly to zero at the destination.
+// remains. The base PWM then decreases linearly toward zero at the destination.
 constexpr float MOTION_BASE_PWM_TAPER_START_REMAINING_PERCENT = 20.0f;
+
+// Near the destination, retain at least this much base PWM while the motor is
+// still outside the position tolerance and still behind the commanded target.
+// This helps overcome static friction without keeping the base PWM active after
+// the motor has overshot the target.
+constexpr float MOTION_ENDPOINT_MINIMUM_BASE_PWM = 40.0f;
 
 // Maximum PWM permitted opposite to the commanded movement direction.
 constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 80.0f;
