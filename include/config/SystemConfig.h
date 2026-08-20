@@ -22,7 +22,7 @@ constexpr uint8_t MOTOR_DEFAULT_OUTPUT_LIMIT = 255;
 
 constexpr bool MOTOR_CLOCKWISE_DIRECTION = true;
 
-constexpr float MOTOR_OUTPUT_DIAMETER_MM = 14.0f;
+constexpr float MOTOR_OUTPUT_DIAMETER_MM = 14.4f;
 
 constexpr int32_t ENCODER_COUNTS_PER_OUTPUT_REVOLUTION = 4128L;
 
@@ -47,14 +47,24 @@ constexpr float MOTION_BASE_PWM = 70.0f;
 // remains. The base PWM then decreases linearly toward zero at the destination.
 constexpr float MOTION_BASE_PWM_TAPER_START_REMAINING_PERCENT = 20.0f;
 
-// Near the destination, retain at least this much base PWM while the motor is
-// still outside the position tolerance and still behind the commanded target.
-// This helps overcome static friction without keeping the base PWM active after
-// the motor has overshot the target.
+// Near the destination, retain at least this much static-friction
+// compensation while outside position tolerance. It is used both for the
+// final approach and for a requested reverse braking/correction direction.
 constexpr float MOTION_ENDPOINT_MINIMUM_BASE_PWM = 40.0f;
 
+// In the last part of a trajectory, stop rebuilding integral in the original
+// movement direction and gently bleed any stored integral that still helps
+// that direction. At remainingDistanceFraction == 0, normal integral action
+// resumes for final settling and overshoot recovery.
+constexpr float MOTION_INTEGRAL_BLEED_START_REMAINING_PERCENT = 20.0f;
+
+// Integral-output units (PWM contribution) removed per second while the above
+// endpoint policy is active. Start conservatively; increase if stale integral
+// is still significant at the destination.
+constexpr float MOTION_STALE_INTEGRAL_BLEED_RATE_PWM_PER_SECOND = 10.0f;
+
 // Maximum PWM permitted opposite to the commanded movement direction.
-constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 80.0f;
+constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 120.0f;
 
 // Fixed Cartesian soft limits measured from the released origin positions.
 // Set both to positive measured values before enabling G01 motion. Keeping a
@@ -74,10 +84,10 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 
 // Initial origin-homing values. These PWM values and distances must be tuned
 // on the real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 175;
-constexpr uint8_t HOMING_BACKOFF_PWM = 100;
-constexpr uint8_t HOMING_FINE_APPROACH_PWM = 75;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 55;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 160;
+constexpr uint8_t HOMING_BACKOFF_PWM = 85;
+constexpr uint8_t HOMING_FINE_APPROACH_PWM = 80;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 65;
 
 constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 
@@ -85,9 +95,9 @@ constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 // recorded when the current X or Y homing target starts. The same reference is
 // retained through coarse approach, backoff, fine approach, and final release.
 constexpr bool HOMING_STRAIGHTNESS_CORRECTION_ENABLED = true;
-constexpr float HOMING_STRAIGHTNESS_KP_PWM_PER_MM = 10.0f;
-constexpr uint8_t HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM = 20;
-constexpr float HOMING_STRAIGHTNESS_DEADBAND_MM = 0.1f;
+constexpr float HOMING_STRAIGHTNESS_KP_PWM_PER_MM = 5.0f;
+constexpr uint8_t HOMING_STRAIGHTNESS_MAXIMUM_CORRECTION_PWM = 10;
+constexpr float HOMING_STRAIGHTNESS_DEADBAND_MM = 0.5f;
 
 // Ignore only the LEFT/X_MIN limit while Y is being homed. X homing and all
 // other limit switches retain their normal homing safety behaviour.

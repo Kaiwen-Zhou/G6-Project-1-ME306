@@ -9,18 +9,18 @@ namespace plotter {
 
 namespace {
 constexpr float INITIAL_A_KP = 0.8f;
-constexpr float INITIAL_A_KI = 0.6f;
+constexpr float INITIAL_A_KI = 0.4f;
 constexpr float INITIAL_A_KV = 0.01f;
 
 constexpr float INITIAL_B_KP = 0.8f;
-constexpr float INITIAL_B_KI = 0.6f;
+constexpr float INITIAL_B_KI = 0.4f;
 constexpr float INITIAL_B_KV = 0.01f;
 
 constexpr float CONTROLLER_MINIMUM_OUTPUT = -255.0f;
 constexpr float CONTROLLER_MAXIMUM_OUTPUT = 255.0f;
-constexpr float INTEGRAL_MINIMUM_OUTPUT = -40.0f;
-constexpr float INTEGRAL_MAXIMUM_OUTPUT = 40.0f;
-constexpr float POSITION_TOLERANCE_COUNTS = 30.0f;
+constexpr float INTEGRAL_MINIMUM_OUTPUT = -20.0f;
+constexpr float INTEGRAL_MAXIMUM_OUTPUT = 20.0f;
+constexpr float POSITION_TOLERANCE_COUNTS = 20.0f;
 
 constexpr uint8_t MOTOR_OUTPUT_LIMIT = SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT;
 

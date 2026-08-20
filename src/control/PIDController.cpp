@@ -20,6 +20,24 @@ void orderLimits(float& minimumValue, float& maximumValue) {
         maximumValue = temporaryValue;
     }
 }
+
+float moveTowardZero(float value, float amount) {
+    if (amount <= 0.0f) {
+        return value;
+    }
+
+    if (value > 0.0f) {
+        value -= amount;
+        return value < 0.0f ? 0.0f : value;
+    }
+
+    if (value < 0.0f) {
+        value += amount;
+        return value > 0.0f ? 0.0f : value;
+    }
+
+    return 0.0f;
+}
 } // namespace
 
 PIDController::PIDController(float proportionalGain, float integralGain, 
@@ -37,33 +55,88 @@ PIDController::PIDController(float proportionalGain, float integralGain,
 }
 
 float PIDController::update(float error, float targetVelocityCountsPerSecond, float timeStepSeconds) {
+    return update(error,
+                  targetVelocityCountsPerSecond,
+                  timeStepSeconds,
+                  0,
+                  0.0f);
+}
+
+float PIDController::update(float error,
+                            float targetVelocityCountsPerSecond,
+                            float timeStepSeconds,
+                            int8_t blockedIntegralDirection,
+                            float integralBleedRatePerSecond) {
     const float proportionalOutput = proportionalGain_ * error;
 
-    const float feedforwardOutput = velocityFeedforwardGain_ * targetVelocityCountsPerSecond;
+    const float feedforwardOutput =
+        velocityFeedforwardGain_ * targetVelocityCountsPerSecond;
 
     if (timeStepSeconds > 0.0f) {
-        const float integralChange = integralGain_ * error * timeStepSeconds;
+        // Endpoint policy: gently remove only stored integral that is still
+        // helping the blocked/original movement direction.
+        //
+        // Integral already helping the opposite correction direction is left
+        // untouched, so braking and overshoot recovery retain integral action.
+        const bool storedIntegralInBlockedDirection =
+            (blockedIntegralDirection > 0 && integralOutput_ > 0.0f) ||
+            (blockedIntegralDirection < 0 && integralOutput_ < 0.0f);
 
-        const float candidateIntegralOutput =
-            clampValue(integralOutput_ + integralChange, minimumIntegralOutput_, maximumIntegralOutput_);
+        if (storedIntegralInBlockedDirection &&
+            integralBleedRatePerSecond > 0.0f) {
+            integralOutput_ =
+                moveTowardZero(
+                    integralOutput_,
+                    integralBleedRatePerSecond * timeStepSeconds);
+        }
 
-        const float candidateControllerOutput = proportionalOutput + candidateIntegralOutput + feedforwardOutput;
+        const float integralChange =
+            integralGain_ * error * timeStepSeconds;
 
-        // Conditional integration anti-windup:
-        // do not accumulate more integral when it would push an
-        // already saturated output further into saturation.
-        const bool pushesFurtherAboveMaximum = candidateControllerOutput > maximumOutput_ && integralChange > 0.0f;
+        const bool integralChangePushesBlockedDirection =
+            (blockedIntegralDirection > 0 && integralChange > 0.0f) ||
+            (blockedIntegralDirection < 0 && integralChange < 0.0f);
 
-        const bool pushesFurtherBelowMinimum = candidateControllerOutput < minimumOutput_ && integralChange < 0.0f;
+        // During endpoint deceleration, do not rebuild integral in the
+        // original movement direction. Integral change in the opposite
+        // direction is still allowed immediately.
+        if (!integralChangePushesBlockedDirection) {
+            const float candidateIntegralOutput =
+                clampValue(
+                    integralOutput_ + integralChange,
+                    minimumIntegralOutput_,
+                    maximumIntegralOutput_);
 
-        if (!pushesFurtherAboveMaximum && !pushesFurtherBelowMinimum) {
-            integralOutput_ = candidateIntegralOutput;
+            const float candidateControllerOutput =
+                proportionalOutput +
+                candidateIntegralOutput +
+                feedforwardOutput;
+
+            // Existing conditional-integration anti-windup remains active:
+            // do not accumulate more integral when it would push an already
+            // saturated PID output farther into saturation.
+            const bool pushesFurtherAboveMaximum =
+                candidateControllerOutput > maximumOutput_ &&
+                integralChange > 0.0f;
+
+            const bool pushesFurtherBelowMinimum =
+                candidateControllerOutput < minimumOutput_ &&
+                integralChange < 0.0f;
+
+            if (!pushesFurtherAboveMaximum &&
+                !pushesFurtherBelowMinimum) {
+                integralOutput_ = candidateIntegralOutput;
+            }
         }
     }
 
-    const float controllerOutput = proportionalOutput + integralOutput_ + feedforwardOutput;
+    const float controllerOutput =
+        proportionalOutput + integralOutput_ + feedforwardOutput;
 
-    return clampValue(controllerOutput, minimumOutput_, maximumOutput_);
+    return clampValue(
+        controllerOutput,
+        minimumOutput_,
+        maximumOutput_);
 }
 
 float PIDController::update(float error, float timeStepSeconds) {

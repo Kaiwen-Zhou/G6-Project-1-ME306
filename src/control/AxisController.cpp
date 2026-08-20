@@ -160,42 +160,98 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
         return;
     }
 
+    float integralBleedStartFraction =
+        SystemConfig::MOTION_INTEGRAL_BLEED_START_REMAINING_PERCENT *
+        PERCENT_TO_FRACTION;
+
+    if (integralBleedStartFraction > 1.0f) {
+        integralBleedStartFraction = 1.0f;
+    }
+
+    const bool endpointIntegralPolicyActive =
+        movementDirection_ != 0 &&
+        integralBleedStartFraction > 0.0f &&
+        remainingDistanceFraction_ > 0.0f &&
+        remainingDistanceFraction_ < integralBleedStartFraction;
+
+    // While the trajectory is still approaching the endpoint, block integral
+    // accumulation in the original movement direction and gently bleed only
+    // stored integral that still helps that direction.
+    //
+    // At remainingDistanceFraction_ == 0 this policy turns off, restoring
+    // normal integral action for final settling and overshoot recovery.
+    const int8_t blockedIntegralDirection =
+        endpointIntegralPolicyActive ? movementDirection_ : 0;
+
+    const float integralBleedRatePerSecond =
+        endpointIntegralPolicyActive
+            ? SystemConfig::MOTION_STALE_INTEGRAL_BLEED_RATE_PWM_PER_SECOND
+            : 0.0f;
+
     float controllerOutput =
-        pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds);
+        pidController_.update(
+            trackingError_,
+            referenceVelocity_,
+            timeStepSeconds,
+            blockedIntegralDirection,
+            integralBleedRatePerSecond);
 
     float basePwm =
         SystemConfig::MOTION_BASE_PWM * calculateBasePwmScale(remainingDistanceFraction_);
 
-    // The normal path-based taper can reduce the base PWM below the motor's
-    // static-friction threshold near the destination. While the motor is still
-    // outside tolerance and still behind the target in the planned movement
-    // direction, keep a small configurable amount of base PWM available.
-    //
-    // If the motor overshoots, stillBehindTarget becomes false immediately, so
-    // this endpoint minimum does not oppose reverse braking correction.
-    const bool stillBehindTarget =
-        (movementDirection_ > 0 && trackingError_ > positionTolerance_) ||
-        (movementDirection_ < 0 && trackingError_ < -positionTolerance_);
-
-    if (stillBehindTarget &&
-        basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
-        basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
-    }
+    const bool outsideTolerance =
+        !isErrorWithinTolerance(trackingError_);
 
     if (movementDirection_ > 0) {
-        // Static-friction compensation is added only while the controller is
-        // still requesting motion in the planned direction. It must not weaken
-        // a requested reverse braking correction.
         if (controllerOutput >= 0.0f) {
+            // Normal forward motion: retain a minimum endpoint base PWM only
+            // while still outside tolerance and still behind the target.
+            if (outsideTolerance &&
+                trackingError_ > 0.0f &&
+                basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
+                basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+            }
+
             controllerOutput += basePwm;
-        } else if (controllerOutput < -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
-            controllerOutput = -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+        } else {
+            // Reverse braking/correction for a positive-direction move.
+            // Near the endpoint, add static-friction compensation in the
+            // requested correction direction so a small PI command can still
+            // produce useful braking/correction torque.
+            if (outsideTolerance) {
+                controllerOutput -=
+                    SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+            }
+
+            if (controllerOutput <
+                -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+                controllerOutput =
+                    -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+            }
         }
     } else if (movementDirection_ < 0) {
         if (controllerOutput <= 0.0f) {
+            // Normal reverse motion: retain a minimum endpoint base PWM only
+            // while still outside tolerance and still behind the target.
+            if (outsideTolerance &&
+                trackingError_ < 0.0f &&
+                basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
+                basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+            }
+
             controllerOutput -= basePwm;
-        } else if (controllerOutput > SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
-            controllerOutput = SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+        } else {
+            // Reverse braking/correction for a negative-direction move.
+            if (outsideTolerance) {
+                controllerOutput +=
+                    SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+            }
+
+            if (controllerOutput >
+                SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+                controllerOutput =
+                    SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+            }
         }
     }
 

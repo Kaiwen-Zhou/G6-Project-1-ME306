@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 /*
  * PI position controller with velocity feedforward.
  *
@@ -24,6 +26,23 @@ class PIDController {
 
         // PI position feedback plus velocity feedforward.
         float update(float error, float targetVelocityCountsPerSecond, float timeStepSeconds);
+
+        // Endpoint-aware overload.
+        //
+        // blockedIntegralDirection:
+        //   +1 blocks integral accumulation in the positive-output direction.
+        //   -1 blocks integral accumulation in the negative-output direction.
+        //    0 leaves integral accumulation unrestricted.
+        //
+        // integralBleedRatePerSecond gently removes stored integral that is
+        // already in the blocked direction. Integral change in the opposite
+        // direction remains allowed so braking and overshoot recovery can
+        // still build integral normally.
+        float update(float error,
+                     float targetVelocityCountsPerSecond,
+                     float timeStepSeconds,
+                     int8_t blockedIntegralDirection,
+                     float integralBleedRatePerSecond);
 
         // Compatibility overload for existing code.
         // Equivalent to target velocity = 0.
