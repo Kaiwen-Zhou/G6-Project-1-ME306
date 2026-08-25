@@ -17,7 +17,7 @@ enum class HomingPhase : uint8_t {
     FINE_APPROACH,
     FINE_CONTACT_PAUSE,
     FINAL_RELEASE,
-    RECORD_POSITION,
+    FINAL_CLEARANCE,
     COMPLETE,
     ABORTED
 };
@@ -100,7 +100,10 @@ class HomingController {
 
         void beginTarget(HomingStage nextStage);
         void setPhase(HomingPhase nextPhase);
-        void advanceAfterOriginRecorded();
+        void advanceAfterTargetRelease();
+        void beginFinalClearance();
+        bool finalClearanceReached() const;
+        void completeHomingAtCurrentPosition();
 
         void updateAllSwitches();
         void clearSwitchEvents();
@@ -123,7 +126,6 @@ class HomingController {
         void stopMotors();
 
         float distanceFromFirstContactMm() const;
-        void recordCurrentTarget();
 
         bool phaseTimedOut(unsigned long timeoutMs) const;
         bool configurationIsValid() const;
@@ -143,8 +145,8 @@ class HomingController {
         HomingResult result_;
 
         Encoder::CountPair firstContactCounts_;
-        Encoder::CountPair releaseCounts_;
         Encoder::CountPair targetStartCounts_;
+        Encoder::CountPair clearanceStartCounts_;
 
         HomingStage stage_;
         HomingPhase phase_;

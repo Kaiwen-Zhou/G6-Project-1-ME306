@@ -22,7 +22,7 @@ constexpr uint8_t MOTOR_DEFAULT_OUTPUT_LIMIT = 255;
 
 constexpr bool MOTOR_CLOCKWISE_DIRECTION = true;
 
-constexpr float MOTOR_OUTPUT_DIAMETER_MM = 14.4f;
+constexpr float MOTOR_OUTPUT_DIAMETER_MM = 14.18f;
 
 constexpr int32_t ENCODER_COUNTS_PER_OUTPUT_REVOLUTION = 4128L;
 

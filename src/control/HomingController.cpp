@@ -3,6 +3,10 @@
 #include <Arduino.h>
 
 namespace {
+// After both limit-search sequences are complete, move this far into the
+// usable workspace in both +X and +Y before defining machine (0, 0).
+constexpr float FINAL_ORIGIN_CLEARANCE_MM = 3.0f;
+
 float absoluteValue(float value) {
     return value < 0.0f ? -value : value;
 }
@@ -33,7 +37,7 @@ HomingController::HomingController(Encoder& encoderA, Encoder& encoderB,
       limitSwitches_{&xMinSwitch, &xMaxSwitch, &yMinSwitch, &yMaxSwitch}, 
       config_(config),
       result_{{0, 0}, {0, 0}, false, false}, 
-      firstContactCounts_{0, 0}, releaseCounts_{0, 0}, targetStartCounts_{0, 0},
+      firstContactCounts_{0, 0}, targetStartCounts_{0, 0}, clearanceStartCounts_{0, 0},
       stage_(HomingStage::IDLE),
       phase_(HomingPhase::IDLE), 
       expectedSwitch_(ExpectedSwitch::NONE), 
@@ -51,8 +55,8 @@ void HomingController::begin() {
 
     result_ = {{0, 0}, {0, 0}, false, false};
     firstContactCounts_ = {0, 0};
-    releaseCounts_ = {0, 0};
     targetStartCounts_ = {0, 0};
+    clearanceStartCounts_ = {0, 0};
 
     stage_ = HomingStage::IDLE;
     phase_ = HomingPhase::IDLE;
@@ -200,10 +204,11 @@ void HomingController::update() {
         if (switchFor(expectedSwitch_).consumeReleasedEvent()) {
             stopMotors();
 
-            // Capture both motor-space counts in the same update that
-            // accepts the debounced active-high falling edge.
-            releaseCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
-            setPhase(HomingPhase::RECORD_POSITION);
+            // Do not record a per-axis origin here.
+            // X release advances to Y homing. Y release advances to one final
+            // +X/+Y clearance move, after which the final physical position is
+            // defined as machine (0, 0).
+            advanceAfterTargetRelease();
         } else if (phaseTimedOut(config_.finalReleaseTimeoutMs)) {
             fail(HomingFault::TIMEOUT);
         } else {
@@ -211,9 +216,16 @@ void HomingController::update() {
         }
         break;
 
-    case HomingPhase::RECORD_POSITION:
-        recordCurrentTarget();
-        advanceAfterOriginRecorded();
+    case HomingPhase::FINAL_CLEARANCE:
+        if (finalClearanceReached()) {
+            completeHomingAtCurrentPosition();
+        } else if (phaseTimedOut(config_.finalReleaseTimeoutMs)) {
+            fail(HomingFault::TIMEOUT);
+        } else {
+            // Move diagonally into the usable workspace. Encoder-derived
+            // Cartesian displacement, not elapsed time, decides completion.
+            driveCartesian(+1, +1, 80);
+        }
         break;
 
     case HomingPhase::IDLE:
@@ -324,30 +336,72 @@ void HomingController::setPhase(HomingPhase nextPhase) {
     phaseStartMs_ = millis();
 }
 
-void HomingController::advanceAfterOriginRecorded() {
+void HomingController::advanceAfterTargetRelease() {
     switch (stage_) {
     case HomingStage::X_ORIGIN:
+        // X boundary has been found and released, but it is NOT machine zero.
+        // Y homing may still move X slightly.
         beginTarget(HomingStage::Y_ORIGIN);
         break;
 
     case HomingStage::Y_ORIGIN:
-        stopMotors();
-
-        // Both physical axes are now at their origin switches.
-        // Reset both motor-space counts in one critical section.
-        Encoder::zeroCountPair(encoderA_, encoderB_);
-
-        stage_ = HomingStage::COMPLETE;
-        phase_ = HomingPhase::COMPLETE;
-        expectedSwitch_ = ExpectedSwitch::NONE;
-        active_ = false;
-        clearSwitchEvents();
+        // Both origin boundaries have now been found. Move away from both
+        // physical limit edges before defining the common software origin.
+        beginFinalClearance();
         break;
 
     default:
         fail(HomingFault::INVALID_CONFIGURATION);
         break;
     }
+}
+
+void HomingController::beginFinalClearance() {
+    stopMotors();
+
+    clearanceStartCounts_ = Encoder::getCountPair(encoderA_, encoderB_);
+
+    // No limit is expected during the clearance move. In particular, if
+    // Y_MIN/BOTTOM becomes pressed again while moving away from it, normal
+    // unexpected-limit handling will stop the homing sequence.
+    expectedSwitch_ = ExpectedSwitch::NONE;
+    interruptVerificationMask_ = 0U;
+    clearSwitchEvents();
+
+    setPhase(HomingPhase::FINAL_CLEARANCE);
+}
+
+bool HomingController::finalClearanceReached() const {
+    const Encoder::CountPair current = Encoder::getCountPair(encoderA_, encoderB_);
+
+    const Converter::CartesianDisplacement displacement =
+        converter_.motorToCartesianDisplacement(
+            static_cast<float>(current.countA - clearanceStartCounts_.countA),
+            static_cast<float>(current.countB - clearanceStartCounts_.countB));
+
+    // Require positive travel in BOTH Cartesian axes. Using signed distance
+    // means a wiring/sign error cannot accidentally satisfy the clearance.
+    return displacement.xMm >= FINAL_ORIGIN_CLEARANCE_MM &&
+           displacement.yMm >= FINAL_ORIGIN_CLEARANCE_MM;
+}
+
+void HomingController::completeHomingAtCurrentPosition() {
+    stopMotors();
+
+    // This is the only point at which machine zero is defined:
+    // after X homing, Y homing, and the final +X/+Y clearance are all complete.
+    Encoder::zeroCountPair(encoderA_, encoderB_);
+
+    result_.xOrigin = {0, 0};
+    result_.yOrigin = {0, 0};
+    result_.xValid = true;
+    result_.yValid = true;
+
+    stage_ = HomingStage::COMPLETE;
+    phase_ = HomingPhase::COMPLETE;
+    expectedSwitch_ = ExpectedSwitch::NONE;
+    active_ = false;
+    clearSwitchEvents();
 }
 
 void HomingController::updateAllSwitches() {
@@ -567,24 +621,6 @@ float HomingController::distanceFromFirstContactMm() const {
     }
 
     return absoluteValue(displacement.yMm);
-}
-
-void HomingController::recordCurrentTarget() {
-    switch (stage_) {
-    case HomingStage::X_ORIGIN:
-        result_.xOrigin = releaseCounts_;
-        result_.xValid = true;
-        break;
-
-    case HomingStage::Y_ORIGIN:
-        result_.yOrigin = releaseCounts_;
-        result_.yValid = true;
-        break;
-
-    default:
-        fail(HomingFault::INVALID_CONFIGURATION);
-        break;
-    }
 }
 
 bool HomingController::phaseTimedOut(unsigned long timeoutMs) const {
