@@ -24,7 +24,7 @@ constexpr float POSITION_TOLERANCE_COUNTS = 20.0f;
 
 constexpr uint8_t MOTOR_OUTPUT_LIMIT = SystemConfig::MOTOR_DEFAULT_OUTPUT_LIMIT;
 
-constexpr float MAXIMUM_FEEDRATE_MM_PER_MINUTE = 60.0f * 500.0f; // 500 mm/s
+constexpr float MAXIMUM_FEEDRATE_MM_PER_MINUTE = 1200.0f; // 1200 mm/s
 constexpr float MAXIMUM_ACCELERATION_MM_PER_SECOND_SQUARED = 50.0f;
 constexpr unsigned long TELEMETRY_INTERVAL_MS = 20UL;
 } // namespace
