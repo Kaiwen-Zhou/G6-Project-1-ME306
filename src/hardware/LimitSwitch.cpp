@@ -1,99 +1,87 @@
 #include "hardware/LimitSwitch.h"
 
-// Constructor
 LimitSwitch::LimitSwitch(uint8_t pin, uint8_t mode, unsigned long debounceTime) {
     pinNumber = pin;
     inputMode = mode;
     debounceDelay = debounceTime;
 
-    // Assume released until hardware is initialised
+    // Assume released until the hardware is initialised.
     stableState = LOW;
     lastReading = LOW;
 
-    // No debounce timing has started yet
+    // No debounce timing has started yet.
     lastDebounceTime = 0;
 
-    // Interrupt state flags
+    // Interrupt state flags.
     interruptPending = false;
     verificationActive = false;
 
-    // One-shot event flags
+    // One-shot event flags.
     pressedEvent = false;
     releasedEvent = false;
     rejectedInterruptEvent = false;
 }
 
-// Initialise hardware
 void LimitSwitch::begin(void (*isr)()) {
-    // Configure input mode
     pinMode(pinNumber, inputMode);
 
-    // Read current switch state
     stableState = digitalRead(pinNumber);
-
-    // Store as previous reading
     lastReading = stableState;
 
-    // If an ISR is provided, attach it to the pin interrupt
+    // Attach an optional rising-edge interrupt to this switch input.
     if (isr != nullptr) {
         attachInterrupt(digitalPinToInterrupt(pinNumber), isr, RISING);
     }
 }
 
-// Called by the ISR to notify that an interrupt has occurred on the switch pin
 void LimitSwitch::notifyFromISR() {
     interruptPending = true;
 }
 
-// Returns true while an ISR-triggered rising edge is awaiting debounce verification.
 bool LimitSwitch::isInterruptVerificationPending() const {
     return interruptPending || verificationActive;
 }
 
-// Update switch state with software debouncing.
 void LimitSwitch::update() {
-    // Read the current raw input
     bool currentReading = digitalRead(pinNumber);
 
-    // If an interrupt has occurred, set the verification flag
+    // Begin debounce verification for a rising edge latched by the ISR.
     if (interruptPending) {
         interruptPending = false;
         verificationActive = true;
-        lastDebounceTime = millis(); // Start debounce timing
+        lastDebounceTime = millis();
     }
 
-    // If verification is active and the switch is reached, clear the verification flag
+    // Accept the ISR edge only if the input remains pressed for the full
+    // debounce interval.
     if (verificationActive) {
         if ((millis() - lastDebounceTime) >= debounceDelay) {
             currentReading = digitalRead(pinNumber);
-            // If the switch is still pressed, accept it as a valid press event
             if (currentReading == HIGH) {
                 if (stableState != HIGH) {
                     stableState = HIGH;
                     pressedEvent = true;
 
-                    // Modified: Keep the lastReading consistent so the pooling debounce does not
-                    // immediately restart.
+                    // Keep polling debounce synchronised with the accepted edge.
                     lastReading = HIGH;
                 }
-            }
-            // If the switch is released, clear the verification flag
-            else {
-                rejectedInterruptEvent = true; // Rising edge occurred but the input returned LOW during debounce.
-                // Treat as contact bounce or electrical noise.
+            } else {
+                // The input returned LOW during debounce, so treat the edge as
+                // contact bounce or electrical noise.
+                rejectedInterruptEvent = true;
             }
 
-            verificationActive = false; // Clear verification flag after processing
+            verificationActive = false;
         }
     }
 
-    // If the raw input has changed,restart the debounce timer.
+    // Restart polling debounce whenever the raw input changes.
     if (currentReading != lastReading) {
         lastDebounceTime = millis();
     }
 
-    // If the input has remained unchanged for the debounce interval, accept it as the new stable
-    // state.
+    // Accept a new stable state after the raw input remains unchanged for the
+    // full debounce interval.
     if ((millis() - lastDebounceTime) >= debounceDelay) {
         if (currentReading != stableState) {
             stableState = currentReading;
@@ -105,42 +93,36 @@ void LimitSwitch::update() {
             }
         }
     }
-    // Save reading for next update
+    // Save the raw reading for the next update.
     lastReading = currentReading;
 }
 
-// Active-high: HIGH means the switch is pressed.
 bool LimitSwitch::isPressed() const {
     return (stableState == HIGH);
 }
 
-// Returns true if switch is released.
 bool LimitSwitch::isReleased() const {
     return !isPressed();
 }
 
-// Returns the stable raw state.
 bool LimitSwitch::getState() const {
     return stableState;
 }
 
-// One-shot events, returns true only once when the switch is pressed.
 bool LimitSwitch::consumePressedEvent() {
     bool event = pressedEvent;
-    pressedEvent = false; // Reset the event flag after consumption
+    pressedEvent = false;
     return event;
 }
 
-// One-shot events, returns true only once when the switch is released.
 bool LimitSwitch::consumeReleasedEvent() {
     bool event = releasedEvent;
-    releasedEvent = false; // Reset the event flag after consumption
+    releasedEvent = false;
     return event;
 }
 
-// One-shot events, returns true only once when a rejected interrupt event occurs.
 bool LimitSwitch::consumeRejectedInterruptEvent() {
     bool event = rejectedInterruptEvent;
-    rejectedInterruptEvent = false; // Reset the event flag after consumption
+    rejectedInterruptEvent = false;
     return event;
 }

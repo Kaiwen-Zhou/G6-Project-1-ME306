@@ -39,35 +39,35 @@ float calculateBasePwmScale(float remainingDistanceFraction) {
 } // namespace
 
 AxisController::AxisController(PIDController& pidController, MotorDriver& motor, float positionTolerance)
-    : legacyEncoder_(nullptr), 
-      pidController_(pidController), 
+    : legacyEncoder_(nullptr),
+      pidController_(pidController),
       motor_(motor),
-      positionTolerance_(makeNonNegative(positionTolerance)), 
+      positionTolerance_(makeNonNegative(positionTolerance)),
       legacyUpdateIntervalMicros_(0),
-      legacyLastUpdateMicros_(0), 
-      referencePosition_(0.0f), 
+      legacyLastUpdateMicros_(0),
+      referencePosition_(0.0f),
       referenceVelocity_(0.0f),
       remainingDistanceFraction_(0.0f),
       movementDirection_(0),
       currentPosition_(0),
-      trackingError_(0.0f), 
+      trackingError_(0.0f),
       active_(false) {
 }
 
 AxisController::AxisController(Encoder& encoder, PIDController& pidController, MotorDriver& motor,
                                int32_t positionTolerance, unsigned long updateIntervalMicros)
-    : legacyEncoder_(&encoder), 
-      pidController_(pidController), 
+    : legacyEncoder_(&encoder),
+      pidController_(pidController),
       motor_(motor),
       positionTolerance_(makeNonNegative(static_cast<float>(positionTolerance))),
-      legacyUpdateIntervalMicros_(updateIntervalMicros), 
-      legacyLastUpdateMicros_(0), 
+      legacyUpdateIntervalMicros_(updateIntervalMicros),
+      legacyLastUpdateMicros_(0),
       referencePosition_(0.0f),
       referenceVelocity_(0.0f),
       remainingDistanceFraction_(0.0f),
       movementDirection_(0),
-      currentPosition_(0), 
-      trackingError_(0.0f), 
+      currentPosition_(0),
+      trackingError_(0.0f),
       active_(false) {
 }
 
@@ -118,7 +118,7 @@ void AxisController::startTracking() {
 
     startTracking(currentPosition);
 
-    // Timing is retained only for the temporary old update() path.
+    // Timing is retained only for the legacy self-timed update() path.
     legacyLastUpdateMicros_ = micros();
 }
 
@@ -161,18 +161,15 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
     }
 
     float integralBleedStartFraction =
-        SystemConfig::MOTION_INTEGRAL_BLEED_START_REMAINING_PERCENT *
-        PERCENT_TO_FRACTION;
+        SystemConfig::MOTION_INTEGRAL_BLEED_START_REMAINING_PERCENT * PERCENT_TO_FRACTION;
 
     if (integralBleedStartFraction > 1.0f) {
         integralBleedStartFraction = 1.0f;
     }
 
-    const bool endpointIntegralPolicyActive =
-        movementDirection_ != 0 &&
-        integralBleedStartFraction > 0.0f &&
-        remainingDistanceFraction_ > 0.0f &&
-        remainingDistanceFraction_ < integralBleedStartFraction;
+    const bool endpointIntegralPolicyActive = movementDirection_ != 0 && integralBleedStartFraction > 0.0f &&
+                                              remainingDistanceFraction_ > 0.0f &&
+                                              remainingDistanceFraction_ < integralBleedStartFraction;
 
     // While the trajectory is still approaching the endpoint, block integral
     // accumulation in the original movement direction and gently bleed only
@@ -180,34 +177,23 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
     //
     // At remainingDistanceFraction_ == 0 this policy turns off, restoring
     // normal integral action for final settling and overshoot recovery.
-    const int8_t blockedIntegralDirection =
-        endpointIntegralPolicyActive ? movementDirection_ : 0;
+    const int8_t blockedIntegralDirection = endpointIntegralPolicyActive ? movementDirection_ : 0;
 
     const float integralBleedRatePerSecond =
-        endpointIntegralPolicyActive
-            ? SystemConfig::MOTION_STALE_INTEGRAL_BLEED_RATE_PWM_PER_SECOND
-            : 0.0f;
+        endpointIntegralPolicyActive ? SystemConfig::MOTION_STALE_INTEGRAL_BLEED_RATE_PWM_PER_SECOND : 0.0f;
 
-    float controllerOutput =
-        pidController_.update(
-            trackingError_,
-            referenceVelocity_,
-            timeStepSeconds,
-            blockedIntegralDirection,
-            integralBleedRatePerSecond);
+    float controllerOutput = pidController_.update(trackingError_, referenceVelocity_, timeStepSeconds,
+                                                   blockedIntegralDirection, integralBleedRatePerSecond);
 
-    float basePwm =
-        SystemConfig::MOTION_BASE_PWM * calculateBasePwmScale(remainingDistanceFraction_);
+    float basePwm = SystemConfig::MOTION_BASE_PWM * calculateBasePwmScale(remainingDistanceFraction_);
 
-    const bool outsideTolerance =
-        !isErrorWithinTolerance(trackingError_);
+    const bool outsideTolerance = !isErrorWithinTolerance(trackingError_);
 
     if (movementDirection_ > 0) {
         if (controllerOutput >= 0.0f) {
             // Normal forward motion: retain a minimum endpoint base PWM only
             // while still outside tolerance and still behind the target.
-            if (outsideTolerance &&
-                trackingError_ > 0.0f &&
+            if (outsideTolerance && trackingError_ > 0.0f &&
                 basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
                 basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
             }
@@ -219,22 +205,18 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
             // requested correction direction so a small PI command can still
             // produce useful braking/correction torque.
             if (outsideTolerance) {
-                controllerOutput -=
-                    SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+                controllerOutput -= SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
             }
 
-            if (controllerOutput <
-                -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
-                controllerOutput =
-                    -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+            if (controllerOutput < -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+                controllerOutput = -SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
             }
         }
     } else if (movementDirection_ < 0) {
         if (controllerOutput <= 0.0f) {
             // Normal reverse motion: retain a minimum endpoint base PWM only
             // while still outside tolerance and still behind the target.
-            if (outsideTolerance &&
-                trackingError_ < 0.0f &&
+            if (outsideTolerance && trackingError_ < 0.0f &&
                 basePwm < SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM) {
                 basePwm = SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
             }
@@ -243,14 +225,11 @@ void AxisController::update(int32_t currentPosition, float timeStepSeconds) {
         } else {
             // Reverse braking/correction for a negative-direction move.
             if (outsideTolerance) {
-                controllerOutput +=
-                    SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
+                controllerOutput += SystemConfig::MOTION_ENDPOINT_MINIMUM_BASE_PWM;
             }
 
-            if (controllerOutput >
-                SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
-                controllerOutput =
-                    SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
+            if (controllerOutput > SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM) {
+                controllerOutput = SystemConfig::MOTION_MAXIMUM_REVERSE_CORRECTION_PWM;
             }
         }
     }

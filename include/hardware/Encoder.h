@@ -3,6 +3,13 @@
 
 #include <Arduino.h>
 
+/**
+ * Encoder count and direction tracking for the two plotter motors.
+ *
+ * Construct one instance for encoder A and one for encoder B, then call update()
+ * from their pin-change ISRs. Count reads, pair snapshots, and zeroing use AVR
+ * atomic sections in Encoder.cpp so the main loop can safely access 32-bit data.
+ */
 class Encoder {
     public:
         struct CountPair {
@@ -12,7 +19,7 @@ class Encoder {
 
         Encoder(bool isEncoderA);
 
-        // Called from the relevant pin-change ISR
+        // Called from the relevant pin-change ISR.
         void update();
 
         void zeroCount();

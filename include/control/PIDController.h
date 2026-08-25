@@ -2,22 +2,14 @@
 
 #include <stdint.h>
 
-/*
- * PI position controller with velocity feedforward.
+/**
+ * PI position controller with velocity feedforward and anti-windup handling.
  *
- * Feedback:
- *     Kp * positionError + accumulated Ki * positionError * dt
- *
- * Feedforward:
- *     Kv * targetVelocity
- *
- * Position error is normally measured in encoder counts.
- * Target velocity is normally measured in counts/s.
- * The final output uses motor-command/PWM units.
- * u = Kp ​e + I + Kv ​Vreference​
- * e: reference count - actual count
- * targetVelocityCountsPerSecond: trajectory reference generated A/B reference velocity
- * Kp/Ki/Kv: PWM/count or count's or count/s
+ * Call update() once per control interval with position error, reference
+ * velocity, and the measured timestep. The normal control law is
+ * u = Kp * error + integralOutput + Kv * referenceVelocity. The endpoint-aware
+ * overload can block and bleed integral in one direction while preserving
+ * integral action for braking and overshoot recovery.
  */
 class PIDController {
     public:

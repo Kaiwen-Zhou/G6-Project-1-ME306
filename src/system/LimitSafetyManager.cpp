@@ -12,15 +12,15 @@ LimitSafetyUpdate emptyUpdate() {
 }
 } // namespace
 
-LimitSafetyManager::LimitSafetyManager(LimitSwitch& leftLimit, LimitSwitch& rightLimit, 
-                                       LimitSwitch& bottomLimit, LimitSwitch& topLimit, 
+LimitSafetyManager::LimitSafetyManager(LimitSwitch& leftLimit, LimitSwitch& rightLimit,
+                                       LimitSwitch& bottomLimit, LimitSwitch& topLimit,
                                        GCodeController& gCodeController,
                                        PlotterSystem& plotterSystem)
     : leftLimit_(leftLimit), rightLimit_(rightLimit), bottomLimit_(bottomLimit), topLimit_(topLimit),
-      gCodeController_(gCodeController), 
-      plotterSystem_(plotterSystem), 
+      gCodeController_(gCodeController),
+      plotterSystem_(plotterSystem),
       recoverableLimitMask_(0U),
-      expectedLimitMask_(0U), 
+      expectedLimitMask_(0U),
       pendingInterruptMask_(0U),
       lastResetBlockingLimitMask_(0U), lastSafetyCheckMs_(0UL) {
 }

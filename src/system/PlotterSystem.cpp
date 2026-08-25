@@ -10,19 +10,21 @@ namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 }
 
-PlotterSystem::PlotterSystem(AxisController& axisA, AxisController& axisB, 
-                             XYCoordinator& xyCoordinator,
-                             TrajectoryPlanner& trajectoryPlanner, 
+PlotterSystem::PlotterSystem(AxisController& axisA, AxisController& axisB, XYCoordinator& xyCoordinator,
+                             TrajectoryPlanner& trajectoryPlanner,
                              HomingController& homingController)
-    : axisA_(axisA), axisB_(axisB), 
-      xyCoordinator_(xyCoordinator), 
+    : axisA_(axisA),
+      axisB_(axisB),
+      xyCoordinator_(xyCoordinator),
       trajectoryPlanner_(trajectoryPlanner),
-      homingController_(homingController), 
-      pendingXDisplacementMm_(0.0f), pendingYDisplacementMm_(0.0f),
-      pendingFeedrateMmPerMinute_(0.0f), 
-      pendingAccelerationMmPerSecondSquared_(0.0f), 
+      homingController_(homingController),
+      pendingXDisplacementMm_(0.0f),
+      pendingYDisplacementMm_(0.0f),
+      pendingFeedrateMmPerMinute_(0.0f),
+      pendingAccelerationMmPerSecondSquared_(0.0f),
       lastTrajectoryUpdateMicros_(0),
-      moveSettling_(false), moveSettlingStartMicros_(0) {
+      moveSettling_(false),
+      moveSettlingStartMicros_(0) {
 }
 
 void PlotterSystem::begin() {
@@ -170,8 +172,8 @@ void PlotterSystem::executeAction(PlotterAction action) {
         trajectoryPlanner_.stop();
         homingController_.stop();
 
-        // HomingController has set both encoder counts to zero
-        // Re-synchronise both motor-space controllers to that zero
+        // HomingController has set both encoder counts to zero.
+        // Re-synchronise both motor-space controllers to that zero.
         xyCoordinator_.reset();
 
         moveSettling_ = false;

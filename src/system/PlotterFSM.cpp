@@ -12,7 +12,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
     // Fault handling is checked before state-specific events so that a fault
     // can interrupt normal operation from any state.
     if (event == FSMEventType::FAULT_DETECTED) {
-        // NONE
         if (faultCode == FaultCode::NONE) {
             return reject(RejectReason::UNEXPECTED_EVENT);
         }
@@ -34,7 +33,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
     }
 
     switch (state_) {
-    // IDLE state
     case PlotterState::IDLE:
         switch (event) {
         case FSMEventType::HOMING_REQUESTED:
@@ -54,7 +52,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
             return reject(RejectReason::UNEXPECTED_EVENT);
         }
 
-    // HOMING state
     case PlotterState::HOMING:
         switch (event) {
         case FSMEventType::HOMING_COMPLETED:
@@ -72,7 +69,6 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
             return reject(RejectReason::UNEXPECTED_EVENT);
         }
 
-    // MOVING state
     case PlotterState::MOVING:
         switch (event) {
         case FSMEventType::MOVE_COMPLETED:
@@ -88,13 +84,9 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
             return reject(RejectReason::UNEXPECTED_EVENT);
         }
 
-    // FAULT state
-    // Don't allow any transitions out of FAULT state except for a reset event
-    // Don't know if we are going to implement reset fault or not
     case PlotterState::FAULT:
         switch (event) {
-        // Whether this reset event may be dispatched, and which safety checks
-        // are required first, will be determined by the external reset policy.
+        // The application verifies physical reset conditions before dispatch.
         case FSMEventType::FAULT_RESET_REQUESTED:
             activeFault_ = FaultCode::NONE;
 
@@ -111,7 +103,7 @@ FSMResult PlotterFSM::dispatch(FSMEventType event, FaultCode faultCode) {
         }
     }
 
-    // Defensive fallback in case state_ is corrupted
+    // Defensive fallback in case state_ is corrupted.
     activeFault_ = FaultCode::INTERNAL_ERROR;
     machineZeroKnown_ = false;
 

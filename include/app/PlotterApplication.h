@@ -15,15 +15,16 @@
 #include "system/PlotterSystem.h"
 #include "system/TrajectoryPlanner.h"
 
+/**
+ * Top-level firmware composition and Arduino application loop.
+ *
+ * Create one instance, call begin() from setup(), call update() from loop(),
+ * and forward the two encoder pin-change interrupts to the public ISR hooks.
+ * The class owns the hardware modules, motion stack, G-code console, telemetry,
+ * and limit-safety update order.
+ */
 namespace plotter {
 
-/**
- * Top-level firmware composition root.
- *
- * Arduino main.cpp owns only the framework entry points and interrupt vectors;
- * this class owns hardware objects, controllers, console processing and the
- * high-level update order.
- */
 class PlotterApplication {
     public:
         PlotterApplication();

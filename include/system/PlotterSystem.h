@@ -9,34 +9,16 @@
 #include "control/XYCoordinator.h"
 
 /**
- * PlotterSystem.h
- * System-level coordinator for the X-Y plotter.
+ * System-level operation coordinator for the X-Y plotter.
  *
- * PlotterSystem connects the hardware-independent PlotterFSM to homing,
- * Cartesian trajectory
- * generation, coordinated A/B control, and the shared
- * fault-stop path. G-code remains an
- * application-layer client of this class.
- *
+ * Call begin() once, submit homing/move/fault requests through the public
+ * methods, and call update() from the main loop. PlotterSystem executes FSM
+ * actions by coordinating HomingController, TrajectoryPlanner, XYCoordinator,
+ * and the shared motion-stop path. Move X/Y inputs are relative Cartesian
+ * displacements from the beginning of the requested move.
  */
-
 namespace plotter {
 
-/**
- * Top-level operation coordinator.
- *
- * For MOVING:
- *
- * TrajectoryPlanner
- *     -> Cartesian displacement and velocity reference
- * XYCoordinator
- *     -> synchronized A/B motor-space references
- * AxisController
- *     -> PID and motor output
- *
- * G1 X/Y values are treated as displacement relative to the beginning
- * of the current move.
- */
 class PlotterSystem {
     public:
         PlotterSystem(AxisController& axisA, AxisController& axisB, XYCoordinator& xyCoordinator,

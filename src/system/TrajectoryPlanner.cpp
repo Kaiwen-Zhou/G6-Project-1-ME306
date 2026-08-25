@@ -9,17 +9,17 @@ constexpr float SECONDS_PER_MINUTE = 60.0f;
 }
 
 TrajectoryPlanner::TrajectoryPlanner()
-    : targetXDisplacementMm_(0.0f), targetYDisplacementMm_(0.0f), 
+    : targetXDisplacementMm_(0.0f), targetYDisplacementMm_(0.0f),
       directionX_(0.0f), directionY_(0.0f),
-      pathLengthMm_(0.0f), 
-      accelerationMmPerSecondSquared_(0.0f), 
+      pathLengthMm_(0.0f),
+      accelerationMmPerSecondSquared_(0.0f),
       peakVelocityMmPerSecond_(0.0f),
-      accelerationTimeSeconds_(0.0f), 
-      cruiseTimeSeconds_(0.0f), totalTimeSeconds_(0.0f), 
+      accelerationTimeSeconds_(0.0f),
+      cruiseTimeSeconds_(0.0f), totalTimeSeconds_(0.0f),
       accelerationDistanceMm_(0.0f),
-      cruiseDistanceMm_(0.0f), 
-      elapsedTimeSeconds_(0.0f), 
-      reference_{0.0f, 0.0f, 0.0f, 0.0f, false, 0.0f}, 
+      cruiseDistanceMm_(0.0f),
+      elapsedTimeSeconds_(0.0f),
+      reference_{0.0f, 0.0f, 0.0f, 0.0f, false, 0.0f},
       active_(false),
       complete_(false) {
 }

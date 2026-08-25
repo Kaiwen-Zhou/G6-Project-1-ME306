@@ -1,18 +1,12 @@
 #pragma once
 
 /**
- * Linear Cartesian trajectory planner for the plotter.
+ * Non-blocking linear Cartesian trajectory planner.
  *
- * One move is defined by a fixed start point and target point. The generated
- * displacement reference is relative to the start of the current move:
- *
- *     start of move -> displacement (0, 0)
- *     end of move   -> displacement (target - start)
- *
- * This allows the output to be passed directly to XYCoordinator.
- *
- * Feedrate is supplied in mm/min to match the G1 F value. Internally the
- * planner generates either a trapezoidal or triangular velocity profile.
+ * startMove() defines one straight-line move and update() advances its
+ * triangular or trapezoidal velocity profile. Generated position references
+ * are displacements relative to the move start, so they can be passed directly
+ * to XYCoordinator. Feedrate is supplied in mm/min to match the G01 F value.
  */
 
 namespace plotter {
@@ -47,7 +41,7 @@ class TrajectoryPlanner {
         // maxAccelerationMmPerSecondSquared is the path acceleration limit.
         //
         // Returns false when feedrate or acceleration is not positive.
-        bool startMove(float startXMm, float startYMm, float targetXMm, float targetYMm, 
+        bool startMove(float startXMm, float startYMm, float targetXMm, float targetYMm,
                        float feedrateMmPerMinute,
                        float maxAccelerationMmPerSecondSquared);
 

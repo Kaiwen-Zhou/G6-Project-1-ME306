@@ -1,12 +1,3 @@
-/*
-Cartesian trajectory displacement
-        ↓ Converter
-relative A/B displacement
-        ↓ add moveStartCountA/B
-absolute A/B reference
-        ↓ AxisController
-motor output
-*/
 #pragma once
 
 #include <stdint.h>
@@ -14,6 +5,14 @@ motor output
 #include "control/AxisController.h"
 #include "control/Converter.h"
 #include "hardware/Encoder.h"
+
+/**
+ * Coordinates the two motor-space controllers from one Cartesian trajectory.
+ *
+ * startMove() captures a synchronised encoder origin. Cartesian displacement
+ * and velocity references are converted to absolute A/B references, then both
+ * AxisController objects are updated from the same count snapshot and timestep.
+ */
 
 // Combined Cartesian and motor-space telemetry for one move.
 struct XYCoordinatorTelemetry {

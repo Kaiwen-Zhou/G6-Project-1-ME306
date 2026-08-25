@@ -5,20 +5,14 @@
 #include "communication/GCodeCommand.h"
 
 /**
- * GCodeParser.h
- * Non-blocking, fixed-memory parser for the MECHENG 306 plotter.
+ * Non-blocking, fixed-memory G-code parser for the MECHENG 306 plotter.
  *
- * Supported commands:
- *   G01 or G1  - linear movement using X, Y and F
- *   G28        - request homing
- *   M999       - request recovery from the FAULT state
+ * Feed it one character at a time with processCharacter(), or parse an already
+ * buffered line with parseLine(). Supported commands are G01/G1, G28, and
+ * M999. G90/G91 are not parsed; positioning mode is supplied by the caller.
  *
- * G90 and G91 are not parsed. G01 positioning mode is selected at compile
- * time through SystemConfig::GCODE_POSITIONING_MODE and supplied to this
- * parser by GCodeController.
- *
- * A non-positive F is rejected. An F above the configured maximum is accepted
- * but reduced to that maximum, as required by the Lecture 6 demonstration.
+ * The parser uses no dynamic allocation. Non-positive feedrates are rejected,
+ * while feedrates above the configured maximum are accepted and limited.
  */
 
 namespace plotter {

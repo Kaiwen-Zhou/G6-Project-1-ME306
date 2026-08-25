@@ -6,6 +6,14 @@
 #include "hardware/LimitSwitch.h"
 #include "system/PlotterSystem.h"
 
+/**
+ * Normal-operation limit monitoring and recoverable-switch bookkeeping.
+ *
+ * Outside HOMING, call updateSwitches() every loop, pass latched ISR masks to
+ * handleLimitInterrupts(), and call update() for the low-rate safety backup.
+ * The manager classifies boundary-consistent faults and maintains the
+ * expected-until-release policy used after M999 and successful homing.
+ */
 namespace plotter {
 
 struct LimitSafetyUpdate {
@@ -17,10 +25,6 @@ struct LimitSafetyUpdate {
         float positionYMm;
 };
 
-/**
- * Owns normal-operation limit monitoring and M999 recovery bookkeeping.
- * Homing continues to own its own expected-switch policy.
- */
 class LimitSafetyManager {
     public:
         enum LimitMask : uint8_t {

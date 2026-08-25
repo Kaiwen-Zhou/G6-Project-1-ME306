@@ -3,22 +3,17 @@
 #include <stdint.h>
 
 /**
- * PlotterFSM.h
  * Hardware-independent top-level state machine for the X-Y plotter.
  *
  * PlotterFSM accepts high-level events, determines whether they are valid in
  * the current state, and returns an FSMResult containing the resulting state,
  * action, and any rejection reason. PlotterSystem should call begin() during
- * initialisation, pass events through dispatch(), and use state(),
- * machineZeroKnown(), and activeFault() for status queries.
+ * initialisation and execute the action returned by each accepted dispatch().
  *
- * The FSM does not directly control hardware or queue pending commands. Move
- * requests currently require machine zero to be known, and requests received
- * while HOMING or MOVING are rejected as BUSY. FAULT preserves the existing
- * machine-zero flag;
- * the application layer decides whether switch conditions
- * permit M999. Further states, events,
- * actions, and fault codes can be added.
+ * The FSM does not control hardware or queue commands. Move requests require a
+ * known machine zero, busy states reject new work, and FAULT preserves the
+ * existing machine-zero flag. The application layer decides whether physical
+ * switch conditions permit M999 before requesting a fault reset.
  */
 
 namespace plotter {

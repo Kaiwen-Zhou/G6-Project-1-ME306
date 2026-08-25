@@ -4,6 +4,13 @@
 
 #include "communication/GCodeCommand.h"
 
+/**
+ * Compile-time machine geometry, motion tuning, homing, and safety settings.
+ *
+ * Application modules consume these constants directly. Values describing the
+ * physical mechanism or controller tuning should be changed only after the
+ * corresponding hardware behaviour has been measured and verified.
+ */
 namespace SystemConfig {
 constexpr unsigned long SERIAL_BAUD_RATE = 115200UL;
 
@@ -70,8 +77,8 @@ constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 120.0f;
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 211.0f; ////////////// TODO: measured X min-to-max travel
-constexpr float MACHINE_Y_TRAVEL_MM = 135.0f; ////////////// TODO: measured Y min-to-max travel
+constexpr float MACHINE_X_TRAVEL_MM = 211.0f;
+constexpr float MACHINE_Y_TRAVEL_MM = 135.0f;
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
@@ -113,7 +120,7 @@ constexpr unsigned long HOMING_OVERALL_TIMEOUT_MS = 180000UL;
 // true: stop on the ISR edge, then wait for software debounce confirmation.
 // false: stop on the ISR edge and accept it immediately during homing.
 constexpr bool HOMING_LIMIT_DEBOUNCE_ENABLED = false;
-// Temporary values until hardware direction testing.
+// Electrical direction inversion for the current motor wiring.
 constexpr bool MOTOR_1_DIRECTION_INVERTED = false;
 constexpr bool MOTOR_2_DIRECTION_INVERTED = true;
 } // namespace SystemConfig

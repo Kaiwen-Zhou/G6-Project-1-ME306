@@ -7,6 +7,16 @@
 #include "hardware/LimitSwitch.h"
 #include "hardware/MotorDriver.h"
 
+/**
+ * Non-blocking origin-homing controller for the coupled X-Y mechanism.
+ *
+ * start() homes X to X_MIN and then Y to Y_MIN using coarse approach,
+ * backoff, fine approach, release, and final clearance phases. Call update()
+ * from the main loop and notifyLimitInterrupt() for latched limit ISR edges.
+ * The controller also monitors non-target limits and can apply encoder-based
+ * straightness correction during single-axis motion.
+ */
+
 enum class HomingStage : uint8_t { IDLE, X_ORIGIN, Y_ORIGIN, COMPLETE, ABORTED };
 
 enum class HomingPhase : uint8_t {
@@ -78,8 +88,8 @@ class HomingController {
 
         // Called from the main loop after a limit ISR is latched. Immediately
         // stops the open-loop primary homing motion and encoder straightness
-        // trim. Configuration selects whether the
-        // edge must then pass debounce verification before it is accepted.
+        // trim. Configuration selects whether the edge must then pass debounce
+        // verification before it is accepted.
         void notifyLimitInterrupt(uint8_t interruptMask);
 
         // Immediately stop all homing motor output.

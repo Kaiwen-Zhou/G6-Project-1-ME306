@@ -6,6 +6,15 @@
 #include "hardware/Encoder.h"
 #include "hardware/MotorDriver.h"
 
+/**
+ * Closed-loop controller for one A/B motor-space axis.
+ *
+ * Start tracking from an encoder position, supply position and velocity
+ * references, and call update() with the latest count and shared control-loop
+ * timestep. The controller combines PI output, velocity feedforward, endpoint
+ * compensation, and the MotorDriver output limit.
+ */
+
 // Motor-space telemetry for one A/B control channel.
 // Cartesian telemetry is calculated by XYCoordinator.
 struct AxisTelemetry {
@@ -21,21 +30,20 @@ struct AxisTelemetry {
 
 class AxisController {
     public:
-        // New constructor used by XYCoordinator.
-        // Encoder readings and control timing are supplied externally.
+        // Coordinated-control constructor used by XYCoordinator. Encoder
+        // readings and control timing are supplied externally.
         AxisController(PIDController& pidController, MotorDriver& motor, float positionTolerance);
 
-        // Temporary compatibility constructor for the current PlotterSystem.
-        // Remove after XYCoordinator is integrated.
-        AxisController(Encoder& encoder, PIDController& pidController, MotorDriver& motor, 
+        // Legacy self-timed constructor retained for standalone callers.
+        AxisController(Encoder& encoder, PIDController& pidController, MotorDriver& motor,
                        int32_t positionTolerance, unsigned long updateIntervalMicros);
 
         void begin();
 
-        // New interface: begin tracking from a synchronised encoder snapshot.
+        // Begin tracking from a synchronised encoder snapshot.
         void startTracking(int32_t currentPosition);
 
-        // Temporary compatibility interface.
+        // Legacy interface that reads the configured encoder internally.
         void startTracking();
 
         // Set the continuously changing motor-space trajectory reference.
@@ -46,16 +54,16 @@ class AxisController {
         void setReference(float referencePosition, float referenceVelocityCountsPerSecond,
                           float remainingDistanceFraction);
 
-        // Temporary fixed-position compatibility interface.
+        // Fixed-position compatibility interface.
         void setReferencePosition(int32_t referencePosition);
 
-        // New interface: execute exactly one control calculation.
+        // Execute exactly one control calculation.
         //
         // currentPosition comes from the synchronised A/B encoder snapshot.
         // timeStepSeconds is shared by both motor controllers.
         void update(int32_t currentPosition, float timeStepSeconds);
 
-        // Temporary internally timed compatibility interface.
+        // Legacy internally timed interface.
         void update();
 
         void stop();
@@ -63,7 +71,7 @@ class AxisController {
         // Reset using a supplied synchronised encoder position.
         void reset(int32_t currentPosition);
 
-        // Temporary compatibility interface.
+        // Legacy interface that reads the configured encoder internally.
         void reset();
 
         bool isActive() const;
@@ -74,7 +82,7 @@ class AxisController {
         bool isErrorWithinTolerance(float error) const;
         int16_t convertToMotorCommand(float controllerOutput) const;
 
-        // Used only by the temporary compatibility interfaces.
+        // Used only by the legacy compatibility interfaces.
         Encoder* legacyEncoder_;
 
         PIDController& pidController_;
@@ -82,7 +90,7 @@ class AxisController {
 
         float positionTolerance_;
 
-        // Used only by the temporary update() interface.
+        // Used only by the legacy update() interface.
         unsigned long legacyUpdateIntervalMicros_;
         unsigned long legacyLastUpdateMicros_;
 

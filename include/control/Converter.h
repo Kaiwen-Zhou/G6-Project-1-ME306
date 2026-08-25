@@ -1,16 +1,15 @@
-/* Note: Converter returns current move's relative A/B displacement
-    XYCoordinator will need to add
-    absoluteAReference =
-        startCountA + motorReference.aDisplacementCounts;
-
-    absoluteBReference =
-        startCountB + motorReference.bDisplacementCounts;
-*/
-
 #pragma once
 
 #include <stdint.h>
 
+/**
+ * Converts between Cartesian X/Y motion and coupled A/B motor space.
+ *
+ * Construct the converter with each motor's millimetres-per-count scale and
+ * coordinate sign. cartesianToMotorReference() returns displacement relative
+ * to the current move; XYCoordinator adds the move-start encoder counts to
+ * form absolute controller references.
+ */
 class Converter {
     public:
         struct MotorReference {
@@ -27,8 +26,8 @@ class Converter {
                 float yMm;
         };
 
-        Converter(float motorAMmPerCount, 
-                  float motorBMmPerCount, 
+        Converter(float motorAMmPerCount,
+                  float motorBMmPerCount,
                   int8_t motorACoordinateSign = 1,
                   int8_t motorBCoordinateSign = 1);
 

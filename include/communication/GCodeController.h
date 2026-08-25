@@ -9,19 +9,15 @@
 #include "system/PlotterSystem.h"
 
 /**
- * GCodeController.h
+ * Application-layer bridge between GCodeParser and PlotterSystem.
  *
- * Small application-layer bridge between GCodeParser and PlotterSystem.
- *
- * Responsibilities:
- *   - read one complete G-code line through GCodeParser;
- *   - pass G01, G28 and M999 to the correct PlotterSystem function;
- *   - commit parser inheritance only after the system accepts a command;
- *   - load configured X/Y soft limits after successful origin homing.
+ * Call begin() once, pass complete lines or individual serial characters to a
+ * process function, and call updateAfterSystem() after PlotterSystem::update().
+ * The controller dispatches G01, G28, and M999, commits parser modal state only
+ * after acceptance, and loads Cartesian soft limits after successful homing.
  *
  * This class does not read Serial, drive motors, update the control loop, or
- * decide whether a physical limit switch is released. Those remain main-loop
- * responsibilities so the class can also be tested on a computer.
+ * own physical limit-switch recovery policy.
  */
 
 namespace plotter {
@@ -54,14 +50,14 @@ struct GCodeControllerResult {
 
 class GCodeController {
     public:
-        GCodeController(PlotterSystem& plotterSystem, 
-                        HomingController& homingController, 
+        GCodeController(PlotterSystem& plotterSystem,
+                        HomingController& homingController,
                         const Converter& converter,
-                        Encoder& encoderA, 
+                        Encoder& encoderA,
                         Encoder& encoderB,
-                        float xTravelMm, 
+                        float xTravelMm,
                         float yTravelMm,
-                        float maximumFeedrateMmPerMinute, 
+                        float maximumFeedrateMmPerMinute,
                         float maximumAccelerationMmPerSecondSquared,
                         GCodePositioningMode positioningMode);
 

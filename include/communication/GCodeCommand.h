@@ -3,16 +3,14 @@
 #include <stdint.h>
 
 /**
- * GCodeCommand.h
- * Data shared between the G-code parser and the plotter system.
+ * Shared G-code command, positioning-mode, and parse-result data types.
  *
  * G01 X and Y input values may use absolute coordinates or relative offsets,
  * selected at compile time. GCodeParser always normalises an accepted move to
  * relative Cartesian offsets before it reaches the motion system.
- * The F value is a feedrate in millimetres per minute.
- *
- * This file contains data only. It does not read Serial, change the FSM,
- * plan a trajectory, convert X/Y to motor counts, or drive hardware.
+ * The F value remains in millimetres per minute. This module contains data
+ * only; parsing, state transitions, planning, and hardware control live in
+ * their respective modules.
  */
 
 namespace plotter {

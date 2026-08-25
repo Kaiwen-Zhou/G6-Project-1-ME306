@@ -3,14 +3,20 @@
 
 #include <Arduino.h>
 
-// LimitSwitch handles reading and software debouncing of a mechanical limit switch.
-// Non-blocking software debouncing using millis() to track time since last state change.
+/**
+ * Active-high mechanical limit input with non-blocking software debounce.
+ *
+ * Call begin() once and update() every main-loop iteration. An optional rising-
+ * edge ISR can call notifyFromISR(); the class then verifies the edge through
+ * the same debounce interval and exposes one-shot press, release, and rejected-
+ * interrupt events.
+ */
 class LimitSwitch {
     public:
         LimitSwitch(uint8_t pin, uint8_t mode = INPUT, unsigned long debounceTime = 20);
-        // pin - Arduino digital input pin
-        // mode - INPUT for the current externally pulled-down inputs
-        // debounceTime - debouncing interval in milliseconds
+        // pin: Arduino digital input pin.
+        // mode: INPUT for the current externally pulled-down inputs.
+        // debounceTime: debounce interval in milliseconds.
 
         // Initialise the switch hardware.
         void begin(void (*isr)() = nullptr);
@@ -63,4 +69,4 @@ class LimitSwitch {
         bool rejectedInterruptEvent; // Flag to indicate if a rejected interrupt event has occurred
 };
 
-#endif
+#endif // LIMIT_SWITCH_H

@@ -26,24 +26,24 @@ GCodeControllerResult rejectedResult(const GCodeCommand& command, GCodeControlle
 
 } // namespace
 
-GCodeController::GCodeController(PlotterSystem& plotterSystem, 
+GCodeController::GCodeController(PlotterSystem& plotterSystem,
                                  HomingController& homingController,
-                                 const Converter& converter, 
-                                 Encoder& encoderA, Encoder& encoderB, 
-                                 float xTravelMm, float yTravelMm, 
+                                 const Converter& converter,
+                                 Encoder& encoderA, Encoder& encoderB,
+                                 float xTravelMm, float yTravelMm,
                                  float maximumFeedrateMmPerMinute,
-                                 float maximumAccelerationMmPerSecondSquared, 
+                                 float maximumAccelerationMmPerSecondSquared,
                                  GCodePositioningMode positioningMode)
-    : plotterSystem_(plotterSystem), 
-      homingController_(homingController), 
-      converter_(converter), 
-      encoderA_(encoderA), encoderB_(encoderB), 
+    : plotterSystem_(plotterSystem),
+      homingController_(homingController),
+      converter_(converter),
+      encoderA_(encoderA), encoderB_(encoderB),
       positioningMode_(positioningMode),
       parser_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute), positioningMode_),
-      safetyLimits_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute)), 
+      safetyLimits_(makeInvalidSafetyLimits(maximumFeedrateMmPerMinute)),
       xTravelMm_(xTravelMm), yTravelMm_(yTravelMm),
       maximumFeedrateMmPerMinute_(maximumFeedrateMmPerMinute),
-      maximumAccelerationMmPerSecondSquared_(maximumAccelerationMmPerSecondSquared), 
+      maximumAccelerationMmPerSecondSquared_(maximumAccelerationMmPerSecondSquared),
       systemStarted_(false),
       safetyLimitsLoaded_(false), expectedLimitMask_(0U) {
 }

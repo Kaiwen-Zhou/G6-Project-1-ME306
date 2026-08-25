@@ -1,34 +1,16 @@
 #pragma once
-/*
- * MotorDriver
- *
- * Handles the low-level control of one bidirectional DC motor using a
- * direction pin and a PWM pin. It does not calculate PID output, read encoder
- * feedback, or decide the required motion.
- *
- * Call begin() once during initialisation. setOutput() accepts a signed command:
- * the sign selects the direction and the magnitude sets the PWM duty cycle.
- * stop() immediately sets PWM to zero. The current applied output and output
- * limit can also be read or changed through the public interfaces.
- *
- * Direction pin, PWM pin, direction inversion, and output limit are configured
- * through the constructor. The PWM pin must support hardware PWM.
- * directionInverted allows the electrical direction to be reversed without
- * changing the sign convention used by higher-level control modules.
- *
- * On the current DFRobot L298N shield, stop() disables the PWM output and
- * therefore provides coast behaviour rather than active braking. The output
- * limit only limits the PWM command; it does not provide current or stall
- * protection.
- *
- * The module is intended to be used by AxisController or by standalone motor
- * test code. Additional stopping modes or diagnostic interfaces may be added
- * later if supported or required.
- */
 
 #include <Arduino.h>
 #include <stdint.h>
 
+/**
+ * Low-level signed PWM control for one bidirectional DC motor.
+ *
+ * Configure the direction pin, PWM pin, optional direction inversion, and PWM
+ * limit in the constructor. After begin(), setOutput() accepts a signed command:
+ * its sign selects direction and its magnitude selects duty cycle. stop() sets
+ * PWM to zero, which produces coast behaviour on the current L298N hardware.
+ */
 class MotorDriver {
     public:
         MotorDriver(uint8_t directionPin, uint8_t pwmPin, bool directionInverted = false, uint8_t outputLimit = 255);
@@ -44,10 +26,10 @@ class MotorDriver {
         // On the current shield, stopping uses coast behaviour.
         void stop();
 
-        // Change the max allowed PWM magnitude
+        // Change the maximum allowed PWM magnitude.
         void setOutputLimit(uint8_t outputLimit);
 
-        // Return the signed output actually applied after limiting
+        // Return the signed output actually applied after limiting.
         int16_t getOutput() const;
 
         uint8_t getOutputLimit() const;

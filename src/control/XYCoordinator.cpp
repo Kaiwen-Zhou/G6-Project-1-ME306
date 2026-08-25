@@ -6,19 +6,19 @@ namespace {
 constexpr float MICROSECONDS_TO_SECONDS = 0.000001f;
 }
 
-XYCoordinator::XYCoordinator(Encoder& encoderA, Encoder& encoderB, 
+XYCoordinator::XYCoordinator(Encoder& encoderA, Encoder& encoderB,
                              AxisController& axisA, AxisController& axisB,
-                             const Converter& converter, 
+                             const Converter& converter,
                              unsigned long controlIntervalMicros)
-    : encoderA_(encoderA), encoderB_(encoderB), 
-      axisA_(axisA), axisB_(axisB), 
+    : encoderA_(encoderA), encoderB_(encoderB),
+      axisA_(axisA), axisB_(axisB),
       converter_(converter),
-      controlIntervalMicros_(controlIntervalMicros), 
-      lastUpdateMicros_(0), 
+      controlIntervalMicros_(controlIntervalMicros),
+      lastUpdateMicros_(0),
       moveStartCountA_(0), moveStartCountB_(0),
-      latestCounts_{0, 0}, 
+      latestCounts_{0, 0},
       referenceXDisplacementMm_(0.0f), referenceYDisplacementMm_(0.0f),
-      referenceXVelocityMmPerSecond_(0.0f), referenceYVelocityMmPerSecond_(0.0f), 
+      referenceXVelocityMmPerSecond_(0.0f), referenceYVelocityMmPerSecond_(0.0f),
       active_(false) {
 }
 
