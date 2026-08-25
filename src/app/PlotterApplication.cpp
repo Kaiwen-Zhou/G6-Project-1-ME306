@@ -394,6 +394,8 @@ void PlotterApplication::printStartupBanner() const {
 
     Serial.println(F("# Startup homing is automatic. Emergency stop: !"));
     printStatus();
+    Serial.println(F("# TELEMETRY COLUMNS: time_ms | X reference/actual/error (mm) | Y reference/actual/error (mm) | "
+                 "motor A error (counts)/PWM/integral | motor B error (counts)/PWM/integral"));
     Serial.println(F("time_ms,reference_x_mm,actual_x_mm,error_x_mm,reference_y_mm,actual_y_mm,"
                      "error_y_mm,error_a_counts,pwm_a,integral_a,error_b_counts,pwm_b,integral_b"));
 }
