@@ -224,7 +224,7 @@ void HomingController::update() {
         } else {
             // Move diagonally into the usable workspace. Encoder-derived
             // Cartesian displacement, not elapsed time, decides completion.
-            driveCartesian(+1, +1, 80);
+            driveCartesian(+1, +1, 90);
         }
         break;
 

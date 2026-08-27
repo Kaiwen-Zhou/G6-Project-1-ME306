@@ -77,8 +77,8 @@ constexpr float MOTION_MAXIMUM_REVERSE_CORRECTION_PWM = 120.0f;
 // Set both to positive measured values before enabling G01 motion. Keeping a
 // value at zero deliberately prevents the G-code controller from loading an
 // unsafe guessed workspace.
-constexpr float MACHINE_X_TRAVEL_MM = 211.0f;
-constexpr float MACHINE_Y_TRAVEL_MM = 135.0f;
+constexpr float MACHINE_X_TRAVEL_MM = 195.0f;
+constexpr float MACHINE_Y_TRAVEL_MM = 139.0f;
 
 // Position allowance used when deciding whether a pressed limit switch is
 // physically consistent with the carriage being at that boundary. Tune this
