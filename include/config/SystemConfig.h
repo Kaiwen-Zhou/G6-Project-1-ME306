@@ -91,14 +91,14 @@ constexpr unsigned long LIMIT_SAFETY_CHECK_INTERVAL_MS = 10UL;
 
 // Initial origin-homing values. These PWM values and distances must be tuned
 // on the real mechanism before full-speed testing.
-constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 160;
+constexpr uint8_t HOMING_COARSE_APPROACH_PWM = 120;
 constexpr uint8_t HOMING_BACKOFF_PWM = 85;
 constexpr uint8_t HOMING_FINE_APPROACH_PWM = 80;
-constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 65;
+constexpr uint8_t HOMING_FINAL_RELEASE_PWM = 70;
 
 constexpr float HOMING_BACKOFF_DISTANCE_MM = 1.0f;
 
-// Keep the axis perpendicular to the current homing direction at the position
+// Keep the axis perpendicular to the current homing direction at the positionG
 // recorded when the current X or Y homing target starts. The same reference is
 // retained through coarse approach, backoff, fine approach, and final release.
 constexpr bool HOMING_STRAIGHTNESS_CORRECTION_ENABLED = true;
