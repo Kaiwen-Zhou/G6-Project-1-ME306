@@ -19,6 +19,21 @@ The final firmware is structured as a set of small, testable modules rather than
 sketch. All time-dependent behaviour is non-blocking, allowing serial input, encoder feedback,
 motion control, homing, telemetry, and safety checks to run together in the main loop.
 
+## Demo and Results
+
+### Hardware demonstration
+
+[▶ Watch the plotter running on the physical hardware (MP4, 1 min 31 s)](docs/assets/plotter-demo.mp4)
+
+The demonstration shows the completed system executing coordinated closed-loop X-Y motion on the
+physical plotter hardware.
+
+### Drawing result
+
+![Two triangular paths drawn by the closed-loop X-Y plotter](docs/assets/plotter-drawing-result.png)
+
+*Two triangular paths produced on graph paper during final system testing.*
+
 ### Core capabilities
 
 - Coordinated straight-line X-Y motion from `G01` / `G1` commands
